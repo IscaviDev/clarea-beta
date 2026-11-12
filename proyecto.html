@@ -8,7 +8,7 @@
 <meta property="og:title" content="Clarea Beta">
 <meta property="og:description" content="La versión en pruebas de Clarea: lo nuevo, antes que nadie.">
 <meta property="og:url" content="https://beta.clarea.dev/">
-<meta property="og:image" content="https://beta.clarea.dev/og-image.png?v=20261112110258">
+<meta property="og:image" content="https://beta.clarea.dev/og-image.png?v=20261112111409">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Logo de Clarea Beta">
@@ -24,7 +24,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
-<script>window.CLAREA_VERSION = "20261112110258"; window.CLAREA_RELEASE = "1.1"; window.CLAREA_BETA = true; window.CLAREA_CHANGES = [{"v": "1.1", "date": "2026-11-12", "title": "Notificaciones, recordatorios e instalar", "items": [["Tareas en segundo plano", "Un apartado nuevo en el menú para ver lo que Clarea está haciendo: la sincronización y la generación con IA, parte por parte, con botón para pararla."], ["Notificaciones", "Los avisos de Clarea en un solo sitio, con los que no has leído marcados. Se guardan en tu cuenta, así que los ves en todos tus dispositivos."], ["Recordatorios", "Al abrir Clarea te avisa de las entregas y exámenes de hoy y de mañana."], ["Añadir a mi calendario", "Cada evento se puede guardar en el calendario del iPhone, de Google o de Outlook, con avisos el día antes que llegan aunque Clarea esté cerrada."], ["Instalar", "Un botón en el móvil para tener Clarea en la pantalla de inicio, con una guía para cada navegador."], ["Guía para la clave de IA", "Paso a paso para conseguir tu clave de Gemini, Claude o ChatGPT, y mensajes de error claros que dicen qué hacer."], ["Novedades", "Esta pantalla: lo nuevo de cada versión."], ["Más limpio", "El tema y tu perfil juntos en la barra de arriba, sin la barra flotante de la IA, y si borras un proyecto que se estaba generando, se cancela solo."]]}, {"v": "1.0", "date": "2026-11-12", "title": "Primera versión", "items": [["Cuentas", "Sincronización entre dispositivos y opción de recordar la sesión."], ["Clases", "DAW-2A y ASIX-2A (Jesuitas Clot) y 1.º DAW (La Salle), con su horario."], ["Hoy", "Las clases del día con hora de inicio y fin, entregas y exámenes."], ["Asignaturas", "Con sus profes, el horario y las faltas de asistencia."], ["Calendario", "Entregas y exámenes (práctico, teórico y de código), con notas, edición y aviso de horas ocupadas."], ["Proyectos", "Sube tu código (carpeta, .zip o GitHub) y Clarea te prepara un repaso: código explicado, historial de Git, glosario y exámenes, con tu propia IA."], ["App", "Se instala en el móvil, funciona sin conexión y tiene modo claro y oscuro."]]}];</script>
+<script>window.CLAREA_VERSION = "20261112111409"; window.CLAREA_RELEASE = "1.1"; window.CLAREA_BETA = true; window.CLAREA_CHANGES = [{"v": "1.1", "date": "2026-11-12", "title": "Notificaciones, recordatorios e instalar", "items": [["Tareas en segundo plano", "Un apartado nuevo en el menú para ver lo que Clarea está haciendo: la sincronización y la generación con IA, parte por parte, con botón para pararla."], ["Notificaciones", "Los avisos de Clarea en un solo sitio, con los que no has leído marcados. Se guardan en tu cuenta, así que los ves en todos tus dispositivos."], ["Recordatorios", "Al abrir Clarea te avisa de las entregas y exámenes de hoy y de mañana."], ["Añadir a mi calendario", "Cada evento se puede guardar en el calendario del iPhone, de Google o de Outlook, con avisos el día antes que llegan aunque Clarea esté cerrada."], ["Instalar", "Un botón en el móvil para tener Clarea en la pantalla de inicio, con una guía para cada navegador."], ["Guía para la clave de IA", "Paso a paso para conseguir tu clave de Gemini, Claude o ChatGPT, y mensajes de error claros que dicen qué hacer."], ["Novedades", "Esta pantalla: lo nuevo de cada versión."], ["Más limpio", "El tema y tu perfil juntos en la barra de arriba, sin la barra flotante de la IA, y si borras un proyecto que se estaba generando, se cancela solo."]]}, {"v": "1.0", "date": "2026-11-12", "title": "Primera versión", "items": [["Cuentas", "Sincronización entre dispositivos y opción de recordar la sesión."], ["Clases", "DAW-2A y ASIX-2A (Jesuitas Clot) y 1.º DAW (La Salle), con su horario."], ["Hoy", "Las clases del día con hora de inicio y fin, entregas y exámenes."], ["Asignaturas", "Con sus profes, el horario y las faltas de asistencia."], ["Calendario", "Entregas y exámenes (práctico, teórico y de código), con notas, edición y aviso de horas ocupadas."], ["Proyectos", "Sube tu código (carpeta, .zip o GitHub) y Clarea te prepara un repaso: código explicado, historial de Git, glosario y exámenes, con tu propia IA."], ["App", "Se instala en el móvil, funciona sin conexión y tiene modo claro y oscuro."]]}];</script>
 <title>Proyecto · Clarea</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1102,7 +1102,23 @@ window.CLAI = (function () {
     return list.find(m => /^gemini-[\d.]+-flash$/.test(m)) || list.find(m => /flash/.test(m)) || list[0];
   }
   async function apiErr(r, prov) {
-    let m = "", why = ""; try { const j = await r.json(); m = (j.error && (j.error.message || j.error.status)) || j.message || ""; why = ((j.error && j.error.details) || []).map(d => d.reason || "").join(" "); } catch (e) {}
+    let m = "", why = "", quota = "", after = 0;
+    try {
+      const j = await r.json(), det = (j.error && j.error.details) || [];
+      m = (j.error && (j.error.message || j.error.status)) || j.message || "";
+      why = det.map(d => d.reason || "").join(" ");
+      quota = det.map(d => (d.violations || []).map(v => v.quotaId || v.quotaMetric || "").join(" ")).join(" ");
+      det.forEach(d => { if (d.retryDelay) after = Math.ceil(parseFloat(d.retryDelay) || 0); });
+    } catch (e) {}
+    const model = (cfg().models || {})[prov] || "";
+    // Gemini, too many requests: it can be a limit per minute (wait), per day (tomorrow) or a model with no free use at all
+    if (prov === "gemini" && r.status === 429) {
+      let q;
+      if (/limit:\s*0\b/.test(m)) { q = new Error("Tu clave gratis no puede usar el modelo «" + model + "»: Google no da uso gratis de ese modelo. Elige otro modelo en la pestaña IA (mejor uno «flash») y vuelve a generar."); q.retry = false; }
+      else if (/PerDay/i.test(quota) || /per day|daily/i.test(m)) { q = new Error("Has gastado el uso gratis de hoy de tu clave de Gemini con «" + model + "». Se renueva cada día: vuelve a generar mañana o elige otro modelo en la pestaña IA. Lo ya hecho se queda guardado."); q.retry = false; }
+      else { q = new Error("Gemini: has llegado al límite por minuto del uso gratis."); q.retry = true; q.wait = Math.min(Math.max(after || 60, 15), 120); q.why = "Límite por minuto del uso gratis de Gemini"; }
+      q.status = 429; q.detail = m; return q;
+    }
     let e;
     // Gemini says exactly what is wrong with the key: tell it in plain words, with what to do
     const G = prov === "gemini" ? (
@@ -1118,7 +1134,11 @@ window.CLAI = (function () {
     else if (r.status === 429) e = new Error("Has llegado al límite de uso de " + PROV[prov].t + ". Espera un poco o revisa tu saldo." + (m ? " (" + m + ")" : ""));
     else if (r.status === 402) e = new Error("No tienes saldo en tu cuenta de " + PROV[prov].t + ".");
     else e = new Error(PROV[prov].t + " ha respondido con un error " + r.status + (m ? ": " + m : "."));
-    e.status = r.status;
+    e.status = r.status; e.detail = m;
+    if (r.status === 503 || r.status === 529 || /overloaded|high demand/i.test(m)) e.why = PROV[prov].t + " está saturada ahora mismo (mucha gente usándola)";
+    else if (r.status === 429) e.why = "Límite de uso de " + PROV[prov].t;
+    else if (r.status >= 500) e.why = PROV[prov].t + " ha tenido un fallo momentáneo";
+    if (after) e.wait = Math.min(after, 120);
     // busy or a short limit: worth trying again in a moment
     e.retry = r.status === 429 || r.status === 500 || r.status === 502 || r.status === 503 || r.status === 504 || r.status === 529;
     return e;
@@ -1178,7 +1198,7 @@ window.CLAI = (function () {
     const waits = [10, 30, 60];
     for (let a = 0; ; a++) {
       try { return await callOnce(text, wantJSON); }
-      catch (e) { if (!e.retry || a >= waits.length) throw e; if (onWait) onWait(waits[a], e); await sleep(waits[a] * 1000); }
+      catch (e) { if (!e.retry || a >= waits.length) throw e; const w = e.wait || waits[a]; if (onWait) onWait(w, e); await sleep(w * 1000); if (onWait) onWait(0, null); }
     }
   }
 
@@ -1217,11 +1237,11 @@ window.CLAI = (function () {
         const c = ctx(q.pid); if (!c) { q.err[id] = "El proyecto ya no existe."; qSet(q); continue; }
         const job = buildJobs(c).find(j => j.id === id);
         if (!job) { q.ids = q.ids.filter(i => i !== id); qSet(q); continue; }
-        q.cur = id; q.curTitle = jobTitle(c, job); q.wait = null; q.beat = Date.now(); qSet(q); emit();
+        q.cur = id; q.curTitle = jobTitle(c, job); q.wait = null; q.waitUntil = null; q.waitWhy = null; q.beat = Date.now(); qSet(q); emit();
         try {
-          const text = await callAI(prompt(c, job), true, s => { const x = qGet(); if (x) { x.wait = s; x.beat = Date.now(); qSet(x); emit(); } });
+          const text = await callAI(prompt(c, job), true, (s, er) => { const x = qGet(); if (x) { x.wait = s || null; x.waitUntil = s ? Date.now() + s * 1000 : null; x.waitWhy = er ? (er.why || "La IA no ha respondido bien") : null; x.lastErr = er ? (er.detail || er.message || "") : x.lastErr; x.beat = Date.now(); qSet(x); emit(); } });
           applyResult(ctx(q.pid), job, parseJSON(text));     // read again: something may have changed meanwhile
-          q = qGet(); q.ids = q.ids.filter(i => i !== id); q.ok++; q.cur = null; q.wait = null; qSet(q);
+          q = qGet(); q.ids = q.ids.filter(i => i !== id); q.ok++; q.cur = null; q.wait = null; q.waitUntil = null; q.waitWhy = null; q.lastErr = null; qSet(q);
           if (typeof window.clareaRefresh === "function") try { window.clareaRefresh(); } catch (e) {}
         } catch (e) {
           q = qGet(); if (!q) break;          // the project was deleted meanwhile
@@ -1250,6 +1270,12 @@ window.CLAI = (function () {
     run();
   }
 
+  // «Gemini está saturada… reintento en 23 s» with the seconds left
+  function waitText(q) {
+    if (!q || !q.wait) return "";
+    const left = q.waitUntil ? Math.max(0, Math.ceil((q.waitUntil - Date.now()) / 1000)) : q.wait;
+    return (q.waitWhy || "La IA está saturada") + ": " + (left ? "vuelvo a intentarlo en " + left + " s" : "volviendo a intentarlo…");
+  }
   /* ---------- notices ---------- */
   function askNotify() {
     try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
@@ -1284,7 +1310,7 @@ window.CLAI = (function () {
   document.addEventListener("DOMContentLoaded", () => setTimeout(() => { if (window.PJ6USER) resume(); }, 1200));
 
   return {PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, intro, JSONONLY, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
 </script>
@@ -1563,6 +1589,31 @@ body:has(.updbar) .aipill{bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 .instarrow[hidden]{display:none}
 @media (hover:hover) and (pointer:fine){.instchips button:hover{border-color:var(--accent)}}
 .aipi.cal{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}.aipi.cal svg{width:15px;height:15px}
+
+/* «Tareas en segundo plano»: the AI card opens its details */
+.bgcol{display:flex;flex-direction:column;gap:12px;min-width:0}
+.bgsum{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"ic t chev" "ic more more";align-items:center;gap:2px 10px;width:100%;font:inherit;text-align:left;color:inherit;background:none;border:0;padding:0;cursor:pointer;border-radius:10px}
+.bgsum>.aipi{grid-area:ic}.bgsum>.bgt{grid-area:t}
+.bgchev{grid-area:chev;width:9px;height:9px;margin:0 6px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg) translateY(-2px);transition:transform .2s ease}
+.bgcard.open .bgchev{transform:rotate(-135deg) translateY(-2px)}
+.bgmore{grid-area:more;font-size:12.5px;font-weight:700;color:var(--accent)}
+.bgdet{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:10px}
+.bgkv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.bgkv>div{background:var(--sunk);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.bgkv small,.bgnow small{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.bgkv b{font-size:14px;overflow-wrap:anywhere}
+.bgnow{margin:0;display:flex;flex-direction:column;gap:2px;font-size:14px;font-weight:600}
+.bgparts li em{font-style:normal;min-width:0;overflow-wrap:anywhere}
+@media (hover:hover) and (pointer:fine){.bgsum:hover .bgt b,.bgsum:hover .bgmore{color:var(--accent)}}
+/* PC: the panel uses the width of the screen */
+@media (min-width:900px){
+  .authcard.bgwide{max-width:min(1100px,94vw)}
+  .bgwide .bgbody{display:grid;grid-template-columns:minmax(280px,1fr) 2.2fr;gap:12px 22px;align-items:start}
+  .bgwide .bgparts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 22px}
+  .bgwide .bgkv{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .bgwide>.ghostbtn{align-self:center;min-width:240px}
+}
+.bglast{font-weight:500;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 </style>
 <script>
 /* ---------- offline accounts: everything stays in this device ---------- */
@@ -2192,8 +2243,8 @@ body:has(.updbar) .aipill{bottom:calc(96px + env(safe-area-inset-bottom,0px))}
   window.clareaPaintBadge = paintBadge;
   window.addEventListener("storage", function(e){ if (window.PJ6USER && (!e.key || e.key === NK() || e.key.indexOf("clarea-aiq/") === 0)) paintBadge(); });
 
-  function sheet(label, icon, sub, onClose){
-    var w = el('<div class="authwrap" role="dialog" aria-modal="true" aria-label="' + label + '"><div class="authcard">'
+  function sheet(label, icon, sub, onClose, wide){
+    var w = el('<div class="authwrap" role="dialog" aria-modal="true" aria-label="' + label + '"><div class="authcard' + (wide ? ' bgwide' : '') + '">'
       + '<div class="authlogo"><span class="acav bgic">' + icon + '</span><div><h1>' + label + '</h1><p>' + sub + '</p></div></div>'
       + '<div class="bgbody"></div><button type="button" class="btn ghostbtn" data-acclose>Cerrar</button></div></div>');
     document.body.appendChild(w);
@@ -2203,15 +2254,15 @@ body:has(.updbar) .aipill{bottom:calc(96px + env(safe-area-inset-bottom,0px))}
   }
 
   /* ----- «Tareas en segundo plano»: what Clarea is doing while you use it ----- */
-  function tasksHtml(u){
+  function tasksHtml(u, open){
     var on = !!cloudGet(u), sl = syncLabel(u);
-    var h = '<p class="bgsect">Sincronización</p><div class="bgcard"><div class="bghead"><span class="sdot ' + (on ? sl.dot : 'off') + '"></span><span class="bgt"><b>' + escT(on ? sl.text : 'Solo en este dispositivo') + '</b><small>'
+    var h = '<div class="bgcol"><p class="bgsect">Sincronización</p><div class="bgcard"><div class="bghead"><span class="sdot ' + (on ? sl.dot : 'off') + '"></span><span class="bgt"><b>' + escT(on ? sl.text : 'Solo en este dispositivo') + '</b><small>'
       + (on ? 'Tus datos se guardan en la nube y llegan a tus otros dispositivos.' : 'Actívala desde el menú para tener tu cuenta en todos tus dispositivos.') + '</small></span></div>'
-      + (on ? '<div class="bgacts"><button type="button" class="bgbtn" data-bgsync>Sincronizar ahora</button></div>' : '') + '</div>';
-    h += '<p class="bgsect">Generación con IA</p>';
-    if (!window.CLAI) return h + '<div class="bgcard bgempty">Abre el inicio de Clarea para ver cómo va la generación.</div>';
+      + (on ? '<div class="bgacts"><button type="button" class="bgbtn" data-bgsync>Sincronizar ahora</button></div>' : '') + '</div></div>';
+    h += '<div class="bgcol"><p class="bgsect">Generación con IA</p>';
+    if (!window.CLAI) return h + '<div class="bgcard bgempty">Abre el inicio de Clarea para ver cómo va la generación.</div></div>';
     var q = aiq();
-    if (!q) return h + '<div class="bgcard bgempty">No se está generando nada. Cuando le pidas a la IA que prepare un proyecto, lo verás aquí y podrás seguir usando Clarea mientras tanto.</div>';
+    if (!q) return h + '<div class="bgcard bgempty">No se está generando nada. Cuando le pidas a la IA que prepare un proyecto, lo verás aquí y podrás seguir usando Clarea mientras tanto.</div></div>';
     var C = window.CLAI, c = C.ctx(q.pid), jobs = c ? C.buildJobs(c) : [], err = q.err || {}, nErr = Object.keys(err).length;
     var done = q.total - q.ids.length, pct = Math.round(done / Math.max(1, q.total) * 100), ic, title, line;
     if (q.finished){
@@ -2222,31 +2273,44 @@ body:has(.updbar) .aipill{bottom:calc(96px + env(safe-area-inset-bottom,0px))}
     } else {
       ic = '<span class="aipi spin"></span>';
       title = 'Generando · ' + done + ' de ' + q.total;
-      line = q.paused === "offline" ? "En pausa: sin internet. Seguirá sola al volver la conexión." : q.wait ? "La IA está saturada: reintento en " + q.wait + " s" : !C.busy() ? "Retomando en unos segundos…" : (q.curTitle ? "Ahora: " + q.curTitle : "Preparando…");
+      line = q.paused === "offline" ? "En pausa: sin internet. Seguirá sola al volver la conexión." : q.wait ? C.waitText(q) : !C.busy() ? "Retomando en unos segundos…" : (q.curTitle ? "Ahora: " + q.curTitle : "Preparando…");
     }
-    h += '<div class="bgcard"><div class="bghead">' + ic + '<span class="bgt"><b>«' + escT(q.name) + '» · ' + escT(q.subj) + '</b><small>' + escT(title) + ' — ' + escT(line) + '</small></span></div>'
+    h += '<div class="bgcard' + (open ? ' open' : '') + '"><button type="button" class="bgsum" data-bgtoggle aria-expanded="' + !!open + '">' + ic + '<span class="bgt"><b>«' + escT(q.name) + '» · ' + escT(q.subj) + '</b><small>' + escT(title) + ' — ' + escT(line) + '</small></span><span class="bgchev" aria-hidden="true"></span><span class="bgmore">' + (open ? 'Ocultar detalles' : 'Ver detalles') + '</span></button>'
       + '<i class="bgbar"><i style="width:' + pct + '%"></i></i>';
     var ids = q.all || q.ids;
-    h += '<ul class="bgparts">' + ids.map(function(id){
+    if (open){
+      var cf = C.cfg(), prov = q.prov || cf.prov, mins = Math.max(0, Math.round((Date.now() - (q.started || Date.now())) / 60000));
+      var pend = q.ids.filter(function(i){ return !err[i]; }).length;
+      h += '<div class="bgdet"><div class="bgkv">'
+        + '<div><small>IA</small><b>' + escT((C.PROV[prov] || {}).t || "—") + (cf.models && cf.models[prov] ? ' · ' + escT(cf.models[prov]) : '') + '</b></div>'
+        + '<div><small>Empezó</small><b>' + (mins < 1 ? 'Ahora mismo' : 'Hace ' + mins + ' min') + '</b></div>'
+        + '<div><small>Hechas</small><b>' + done + ' de ' + q.total + ' (' + pct + ' %)</b></div>'
+        + '<div><small>Pendientes</small><b>' + pend + (nErr ? ' · ' + nErr + ' con error' : '') + '</b></div>'
+        + '</div>'
+        + (!q.finished && q.curTitle ? '<p class="bgnow"><small>Ahora mismo</small>' + escT(q.curTitle) + '</p>' : '')
+        + (q.lastErr && !q.finished ? '<p class="bgnow bglast"><small>Última respuesta de la IA</small>' + escT(String(q.lastErr).slice(0, 300)) + '</p>' : '');
+      h += '<ul class="bgparts">' + ids.map(function(id){
       var j = jobs.filter(function(x){ return x.id === id; })[0], t = j && c ? C.jobTitle(c, j) : id;
       var st = err[id] ? 'err' : q.ids.indexOf(id) < 0 ? 'ok' : (q.cur === id && !q.finished) ? 'run' : 'wait';
-      return '<li class="' + st + '"><span>' + (st === 'ok' ? '✓' : st === 'err' ? '!' : st === 'run' ? '' : '·') + '</span>' + escT(t) + (st === 'err' ? ' — ' + escT(err[id]) : '') + '</li>';
-    }).join("") + '</ul>';
+      return '<li class="' + st + '"><span>' + (st === 'ok' ? '✓' : st === 'err' ? '!' : st === 'run' ? '' : '·') + '</span><em>' + escT(t) + (st === 'err' ? ' — ' + escT(err[id]) : '') + '</em></li>';
+      }).join("") + '</ul></div>';
+    }
     h += '<div class="bgacts"><a class="bgbtn main" href="proyecto.html?id=' + encodeURIComponent(q.pid) + '">Ver el proyecto</a>'
-      + (q.finished ? '<button type="button" class="bgbtn" data-bgclear>Quitar de la lista</button>' : '<button type="button" class="bgbtn" data-bgstop>Parar</button>') + '</div></div>';
+      + (q.finished ? '<button type="button" class="bgbtn" data-bgclear>Quitar de la lista</button>' : '<button type="button" class="bgbtn" data-bgstop>Parar</button>') + '</div></div></div>';
     return h;
   }
   function openTasks(){
     if (document.querySelector('.authwrap[aria-label="Tareas en segundo plano"]')) return;
-    var u = window.PJ6USER, last = "", iv;
-    var S = sheet("Tareas en segundo plano", ICO_BG, "Lo que Clarea está haciendo mientras la usas", function(){ clearInterval(iv); });
+    var u = window.PJ6USER, last = "", iv, open = false;
+    var S = sheet("Tareas en segundo plano", ICO_BG, "Lo que Clarea está haciendo mientras la usas", function(){ clearInterval(iv); }, true);
     function paint(){
-      var h = tasksHtml(u); if (h !== last){ last = h; S.body.innerHTML = h; }
+      var h = tasksHtml(u, open); if (h !== last){ last = h; S.body.innerHTML = h; }
       var q = aiq(); if (q && q.finished && !q.seen){ q.seen = true; try { localStorage.setItem("clarea-aiq/" + u, JSON.stringify(q)); } catch(e){} }
     }
     paint(); iv = setInterval(paint, 1000);
     S.w.addEventListener("click", function(e){
-      if (e.target.closest("[data-bgstop]")){ window.CLAI.stop(); paint(); paintBadge(); }
+      if (e.target.closest("[data-bgtoggle]")){ open = !open; paint(); var t = S.w.querySelector("[data-bgtoggle]"); if (t) t.focus(); }
+      else if (e.target.closest("[data-bgstop]")){ window.CLAI.stop(); paint(); paintBadge(); }
       else if (e.target.closest("[data-bgclear]")){ window.CLAI.dismiss(); paint(); paintBadge(); }
       else if (e.target.closest("[data-bgsync]")){ var b = e.target.closest("[data-bgsync]"); b.disabled = true; b.textContent = "Sincronizando…"; var re = function(){ last = ""; paint(); }; syncNow().then(re, re); }
     });
@@ -2931,7 +2995,7 @@ function jobsHtml(){
   return buildJobs().map((j, i) => {
     const err = q && q.err && q.err[j.id], cur = run && q.cur === j.id, queued = run && !cur && q.ids.includes(j.id) && !err;
     const cls = cur ? "run" : err ? "err" : AID.done[j.id] ? "done" : "";
-    const msg = err || (cur ? (q.wait ? "La IA está saturada: reintento en " + q.wait + " s" : "Generando… puede tardar un par de minutos") : queued ? "En cola" : jobWhat(j));
+    const msg = err || (cur ? (q.wait ? CLAI.waitText(q) : "Generando… puede tardar un par de minutos") : queued ? "En cola" : jobWhat(j));
     return '<div class="aijob ' + cls + '"><span class="aid">' + (cls === "run" ? "…" : cls === "err" ? "!" : cls === "done" ? "✓" : i + 1) + '</span><span class="ait"><b>' + esc(jobTitle(j)) + '</b><small>' + esc(msg) + '</small></span>' + (!run && aiReady() ? '<button class="aia" data-airedo="' + j.id + '">' + (AID.done[j.id] ? "Rehacer" : "Generar") + '</button>' : '') + '</div>';
   }).join("");
 }
