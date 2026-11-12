@@ -214,7 +214,46 @@ window.CL = (function () {
   }
   const lineCount = t => t === "" ? 0 : t.split("\n").length - (t.endsWith("\n") ? 1 : 0);
 
-  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, MAX_TOTAL};
+  /* ----- things that look like passwords or keys (before sharing the code) ----- */
+  // each rule: what it is, and a pattern whose group 1 is the secret itself
+  const SECRET_RULES = [
+    ["Clave privada", /(-----BEGIN [A-Z ]*PRIVATE KEY-----)/],
+    ["Clave de Google", /\b(AIza[0-9A-Za-z_-]{35})\b/],
+    ["Clave de AWS", /\b(AKIA[0-9A-Z]{16})\b/],
+    ["Token de GitHub", /\b((?:ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,})\b/],
+    ["Clave de API", /\b((?:sk|pk|rk)[-_](?:live[-_]|test[-_]|proj[-_]|ant[-_])?[A-Za-z0-9_-]{20,})\b/],
+    ["Contraseña en un enlace", /\b(?:mongodb(?:\+srv)?|mysql|postgres(?:ql)?|redis|amqp|ftp|smtp):\/\/[^:\s"'\/]+:([^@\s"'\/]{3,})@/i],
+    ["Contraseña de la base de datos", /\b(?:mysqli_connect|new\s+mysqli|mysqli|mysql_connect)\s*\(\s*["'][^"']*["']\s*,\s*["'][^"']*["']\s*,\s*["']([^"']{3,})["']/i],
+    ["Contraseña o clave", /(?:pass(?:word|wd)?|pwd|contrase(?:ñ|n)a|clave|secret|secreto|api[_-]?key|apikey|access[_-]?key|auth[_-]?token|token|private[_-]?key)["']?\s*(?:=>|:=|[:=])\s*["'`]([^"'`\s]{4,})["'`]/i],
+    ["Contraseña o clave", /^\s*(?:export\s+)?[A-Z0-9_]*(?:PASS(?:WORD)?|PWD|SECRET|API_?KEY|TOKEN|PRIVATE_KEY|ACCESS_KEY)[A-Z0-9_]*\s*=\s*["']?([^"'\s#]{4,})/]
+  ];
+  // examples and blanks that are fine to share
+  const SECRET_FAKE = /^(?:\*+|x+|\.+|-+|change_?me|your[_-]?\S*|tu[_-]?\S*|mi[_-]?(?:clave|contrase(?:ñ|n)a)|example|ejemplo|placeholder|password|contrase(?:ñ|n)a|secret|null|none|undefined|true|false|\$\{?\w+\}?|process\.env\.\w+|<[^>]*>|\{\{.*\}\})$/i;
+  function secretsOf(files) {
+    const out = [];
+    Object.keys(files).sort().forEach(p => {
+      const name = p.split("/").pop().toLowerCase(), isEnv = /^\.env(\..+)?$/.test(name);
+      if (/example|sample|template|\.dist$/.test(name)) return;                      // files made to show what goes where
+      files[p].split("\n").forEach((l, i) => {
+        if (l.length > 2000) return;
+        for (const [what, re] of SECRET_RULES) {
+          const m = l.match(re), v = m && m[1];
+          if (!v || SECRET_FAKE.test(v)) continue;
+          out.push({path: p, line: i + 1, what: isEnv ? "En un archivo .env" : what, val: v}); return;
+        }
+      });
+    });
+    return out.slice(0, 200);
+  }
+  // a copy of anything (code, explanations, glossary…) with those secrets replaced by •••
+  function maskSecrets(obj, vals) {
+    let s = JSON.stringify(obj);
+    [...new Set(vals)].filter(v => v && v.length >= 3).sort((a, b) => b.length - a.length)
+      .forEach(v => { s = s.split(JSON.stringify(v).slice(1, -1)).join("•••"); });
+    return JSON.parse(s);
+  }
+
+  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, secretsOf, maskSecrets, MAX_TOTAL};
 })();
 
 ;
