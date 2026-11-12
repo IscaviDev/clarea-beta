@@ -214,42 +214,6 @@ window.CL = (function () {
   }
   const lineCount = t => t === "" ? 0 : t.split("\n").length - (t.endsWith("\n") ? 1 : 0);
 
-  /* ----- a new version of a file: the explained blocks whose lines did not change, moved to where they are now ----- */
-  // blocks: [{from, to, …}] of the old text → {blocks: the ones kept (with new line numbers), gaps: [[from, to]] of new lines without explanation}
-  function carryBlocks(oldText, newText, blocks) {
-    const split = t => { const a = t.split("\n"); if (t.endsWith("\n")) a.pop(); return a; };
-    const O = split(oldText), N = split(newText), at = {};
-    N.forEach((l, i) => { (at[l] = at[l] || []).push(i); });
-    const kept = []; let min = 0, shift = 0;
-    (blocks || []).slice().sort((a, b) => a.from - b.from).forEach(b => {
-      // the block without its blank lines at the edges: blank lines are free to move
-      let s = b.from - 1, e = b.to - 1;
-      while (s <= e && !(O[s] || "").trim()) s++;
-      while (e >= s && !(O[e] || "").trim()) e--;
-      if (s > e) return;
-      const seq = O.slice(s, e + 1), want = s + shift;
-      let best = -1;
-      (at[seq[0]] || []).forEach(i => {
-        if (i < min || i + seq.length > N.length) return;
-        for (let k = 1; k < seq.length; k++) if (N[i + k] !== seq[k]) return;
-        if (best < 0 || Math.abs(i - want) < Math.abs(best - want)) best = i;
-      });
-      if (best < 0) return;
-      kept.push(Object.assign({}, b, {from: best + 1, to: best + seq.length}));
-      min = best + seq.length; shift = best - s;
-    });
-    // the new lines not covered by a kept block (blank lines don't need an explanation)
-    const cov = new Uint8Array(N.length);
-    kept.forEach(b => { for (let i = b.from - 1; i < b.to; i++) cov[i] = 1; });
-    const gaps = []; let g = -1;
-    for (let i = 0; i <= N.length; i++) {
-      const open = i < N.length && !cov[i];
-      if (open && g < 0) g = i;
-      if (!open && g >= 0) { if (N.slice(g, i).some(l => l.trim())) gaps.push([g + 1, i]); g = -1; }
-    }
-    return {blocks: kept, gaps};
-  }
-
   /* ----- things that look like passwords or keys (before sharing the code) ----- */
   // each rule: what it is, and a pattern whose group 1 is the secret itself
   const SECRET_RULES = [
@@ -289,7 +253,7 @@ window.CL = (function () {
     return JSON.parse(s);
   }
 
-  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, carryBlocks, secretsOf, maskSecrets, MAX_TOTAL};
+  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, secretsOf, maskSecrets, MAX_TOTAL};
 })();
 
 ;
@@ -307,10 +271,14 @@ window.CLAI = (function () {
 
   /* ---------- providers and the key (the key lives only on this device) ---------- */
   const PROV = {
-    gemini: {t: "Gemini", s: "Google", url: "https://aistudio.google.com/apikey", note: "Tiene un uso gratuito con límites diarios."}
+    claude: {t: "Claude", s: "Anthropic", url: "https://console.anthropic.com/settings/keys", note: "De pago por uso: unos céntimos por proyecto."},
+    openai: {t: "ChatGPT", s: "OpenAI", url: "https://platform.openai.com/api-keys", note: "De pago por uso: unos céntimos por proyecto."},
+    gemini: {t: "Gemini", s: "Google", url: "https://aistudio.google.com/apikey", note: "Tiene un uso gratuito con límites diarios."},
+    openrouter: {t: "OpenRouter", s: "Modelos gratis", url: "https://openrouter.ai/settings/keys", note: "Da acceso gratis a varios modelos (unas 50 peticiones al día sin pagar nada)."}
   };
   // only for testing on this computer: a local stand-in that answers like Gemini
   const GEMINI = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && (function () { try { return localStorage.getItem("clarea-dev-ai"); } catch (e) { return null; } })()) || "https://generativelanguage.googleapis.com";
+  const CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
   // the AI settings (keys, models, the default AI) go with the account: synced to every device
   function cfg() {
     try {
@@ -347,15 +315,10 @@ window.CLAI = (function () {
     const jobs = []; let cur = [], curN = 0, k = 0;
     const flush = () => { if (cur.length) { jobs.push({id: "code-" + (k++), kind: "code", parts: cur}); cur = []; curN = 0; } };
     c.paths.filter(p => explainable(c, p)).forEach(p => {
-      const n = CL.lineCount(c.CODE.files[p]), F = c.AID.files[p];
-      // after updating the code, a file that changed a little is explained only where it changed (its «gaps»)
-      const ranges = F && Array.isArray(F.gaps) && F.gaps.length ? F.gaps.map(g => [Math.max(1, +g[0]), Math.min(n, +g[1])]).filter(g => g[0] <= g[1]) : [[1, n]];
-      ranges.forEach(([a0, z]) => {
-        const len = z - a0 + 1;
-        if (len > LIM) { flush(); for (let a = a0; a <= z; a += LIM) jobs.push({id: "code-" + (k++), kind: "code", parts: [{p, from: a, to: Math.min(z, a + LIM - 1)}]}); return; }
-        if (curN + len > LIM) flush();
-        cur.push({p, from: a0, to: z}); curN += len;
-      });
+      const n = CL.lineCount(c.CODE.files[p]);
+      if (n > LIM) { flush(); for (let a = 1; a <= n; a += LIM) jobs.push({id: "code-" + (k++), kind: "code", parts: [{p, from: a, to: Math.min(n, a + LIM - 1)}]}); return; }
+      if (curN + n > LIM) flush();
+      cur.push({p, from: 1, to: n}); curN += n;
     });
     flush();
     jobs.push({id: "gloss", kind: "gloss"});
@@ -364,21 +327,14 @@ window.CLAI = (function () {
     return jobs;
   }
   function jobTitle(c, j) {
-    if (j.kind === "code") return j.parts.length === 1 ? (j.parts[0].from > 1 || j.parts[0].to < CL.lineCount(c.CODE.files[j.parts[0].p]) ? baseName(j.parts[0].p) + " (líneas " + j.parts[0].from + "–" + j.parts[0].to + ")" : baseName(j.parts[0].p)) : ((u => u.length === 1 ? u[0] + " (partes que cambian)" : u.length + " archivos: " + u.slice(0, 3).join(", ") + (u.length > 3 ? "…" : ""))([...new Set(j.parts.map(x => baseName(x.p)))]));
+    if (j.kind === "code") return j.parts.length === 1 ? (j.parts[0].from > 1 || j.parts[0].to < CL.lineCount(c.CODE.files[j.parts[0].p]) ? baseName(j.parts[0].p) + " (líneas " + j.parts[0].from + "–" + j.parts[0].to + ")" : baseName(j.parts[0].p)) : j.parts.length + " archivos: " + j.parts.slice(0, 3).map(x => baseName(x.p)).join(", ") + (j.parts.length > 3 ? "…" : "");
     return {gloss: "Glosario", git: "Ramas y pull requests"}[j.kind] || "Exámenes · " + DT[j.diff];
   }
   const jobWhat = j => j.kind === "code" ? "Qué hace cada archivo y cada línea" : j.kind === "gloss" ? "Conceptos con ejemplos de tu código" : j.kind === "git" ? "Para qué es cada rama y cada PR" : "20 preguntas de test y 6 escritas";
   // a code part is done when its lines are explained (whatever size the parts had when they were made)
   function isDone(c, j) {
     if (j.kind !== "code") return !!c.AID.done[j.id];
-    // every line of the part with code in it is inside an explained block (blank lines don't count)
-    return j.parts.every(x => {
-      const F = c.AID.files[x.p], B = F && F.blocks; if (!B || !B.length) return false;
-      const ls = c.lines(x.p), cov = new Uint8Array(x.to - x.from + 1);
-      B.forEach(b => { for (let i = Math.max(b.from, x.from); i <= Math.min(b.to, x.to); i++) cov[i - x.from] = 1; });
-      for (let i = x.from; i <= x.to; i++) if (!cov[i - x.from] && (ls[i - 1] || "").trim()) return false;
-      return true;
-    });
+    return j.parts.every(x => { const F = c.AID.files[x.p], B = F && F.blocks; return !!(B && B.length && B.some(b => b.from <= x.from) && B.some(b => b.to >= x.to)); });
   }
   function status(c, opt) { const js = buildJobs(c, opt); return {total: js.length, done: js.filter(j => isDone(c, j)).length, jobs: js}; }
 
@@ -619,11 +575,38 @@ window.CLAI = (function () {
 
   /* ---------- calling the user's own AI (straight from the browser, with their key) ---------- */
   async function listModels(prov, key) {
+    if (prov === "claude") {
+      const r = await fetch("https://api.anthropic.com/v1/models?limit=100", {headers: {"x-api-key": key, "anthropic-version": "2026-10-21", "anthropic-dangerous-direct-browser-access": "true"}});
+      if (!r.ok) throw await apiErr(r, prov);
+      const ids = ((await r.json()).data || []).map(m => m.id);
+      return CLAUDE_MODELS.filter(m => ids.includes(m)).concat(ids.filter(m => !CLAUDE_MODELS.includes(m)));
+    }
+    if (prov === "openai") {
+      const r = await fetch("https://api.openai.com/v1/models", {headers: {Authorization: "Bearer " + key}});
+      if (!r.ok) throw await apiErr(r, prov);
+      return ((await r.json()).data || []).map(m => m.id).filter(id => /^(gpt-|o\d|chatgpt)/.test(id) && !/(audio|realtime|image|tts|transcribe|search|embedding|instruct|moderation)/.test(id)).sort().reverse();
+    }
+    if (prov === "openrouter") {
+      const k = await fetch("https://openrouter.ai/api/v1/key", {headers: {Authorization: "Bearer " + key}});
+      if (!k.ok) throw await apiErr(k, prov);
+      const r = await fetch("https://openrouter.ai/api/v1/models");
+      if (!r.ok) throw await apiErr(r, prov);
+      const all = ((await r.json()).data || []).filter(m => /:free$/.test(m.id) && !/(vision|image|audio|embed|guard|tts)/i.test(m.id));
+      // big context (whole parts of code fit), full-size models before small or preview ones
+      // size in the name («70b», «550b-a55b»): tiny models write poor explanations
+      const size = m => { const x = m.id.match(/(\d+(?:\.\d+)?)b(?![a-z])/i); return x ? parseFloat(x[1]) : 0; };
+      const score = m => ((m.context_length || 0) >= 128000 ? 4 : 0) - (/(small|mini|lite|lightning|nano|tiny|micro)/i.test(m.id) ? 2 : 0) - (/(preview|beta|exp)/i.test(m.id) ? 1 : 0)
+        - (size(m) && size(m) < 20 ? 2 : 0) + (size(m) >= 100 ? 1 : 0);
+      return all.sort((a, b) => score(b) - score(a) || (b.context_length || 0) - (a.context_length || 0) || (b.created || 0) - (a.created || 0)).map(m => m.id);
+    }
     const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" + encodeURIComponent(key));
     if (!r.ok) throw await apiErr(r, prov);
     return ((await r.json()).models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /gemini/.test(m.name) && !/(image|tts|audio|embedding|live)/.test(m.name)).map(m => m.name.replace(/^models\//, "")).sort().reverse();
   }
   function pickModel(prov, list) {
+    if (prov === "claude") return list.includes("claude-opus-5-5") ? "claude-opus-5-5" : list[0];
+    if (prov === "openai") return list.find(m => /^gpt-\d+(\.\d+)?$/.test(m)) || list.find(m => /^gpt-/.test(m)) || list[0];
+    if (prov === "openrouter") return list[0];                       // already sorted: the free model with the biggest context
     // Gemini: «Flash-Lite» first. Its free use is much bigger (about 500 requests a day, against about 20 for «Flash»)
     const ok = m => !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
     return list.find(m => ok(m) && /^gemini-[\d.]+-flash-lite$/.test(m)) || list.find(m => ok(m) && /flash-lite/.test(m))
@@ -639,6 +622,15 @@ window.CLAI = (function () {
       det.forEach(d => { if (d.retryDelay) after = Math.ceil(parseFloat(d.retryDelay) || 0); });
     } catch (e) {}
     const model = (cfg().models || {})[prov] || "";
+    // OpenRouter: free use per day / per minute, or a free model that is gone
+    if (prov === "openrouter") {
+      let q = null;
+      if (r.status === 429 && /per-day|per day|daily/i.test(m)) { q = new Error("Has gastado el uso gratis de hoy de OpenRouter (unas 50 peticiones al día). Se renueva cada día: sigue mañana, o usa Gemini Flash-Lite, que tiene mucho más."); q.retry = false; q.quotaKind = "day"; }
+      else if (r.status === 429) { q = new Error("OpenRouter: límite por minuto o el modelo gratis está muy solicitado."); q.retry = true; q.wait = Math.min(Math.max(after || 30, 15), 120); q.why = /upstream/i.test(m) ? "El modelo gratis está muy solicitado" : "Límite por minuto del uso gratis de OpenRouter"; }
+      else if (r.status === 404 || /no endpoints/i.test(m)) { q = new Error("Este modelo gratis de OpenRouter ya no está disponible. Cambia a otro y sigue."); q.retry = false; q.quotaKind = "model"; }
+      else if (r.status === 402) { q = new Error("OpenRouter pide saldo para este modelo. Elige uno gratis (los que acaban en «:free»)."); q.retry = false; q.quotaKind = "model"; }
+      if (q) { q.status = r.status; q.detail = m; return q; }
+    }
     // Gemini, too many requests: it can be a limit per minute (wait), per day (tomorrow) or a model with no free use at all
     if (prov === "gemini" && r.status === 429) {
       let q;
@@ -671,13 +663,52 @@ window.CLAI = (function () {
     e.retry = r.status === 429 || r.status === 500 || r.status === 502 || r.status === 503 || r.status === 504 || r.status === 529;
     return e;
   }
-  /* files (photos and PDFs) go with the text: [{mime, b64, name}]. Gemini reads images and PDFs */
+  /* files (photos and PDFs) go with the text: [{mime, b64, name}]. All 4 AIs read images and PDFs, each in its own format */
   async function callOnce(text, wantJSON, files, opt) {
     opt = opt || {};
     const c = cfg(), prov = c.prov, key = c.keys[prov], model = opt.model || c.models[prov], signal = opt.signal;
     files = files || [];
     let r;
     try {
+      if (prov === "claude") {
+        const content = files.length ? files.map(f => f.mime === "application/pdf" ? {type: "document", source: {type: "base64", media_type: f.mime, data: f.b64}} : {type: "image", source: {type: "base64", media_type: f.mime, data: f.b64}}).concat([{type: "text", text}]) : text;
+        const body = {model, max_tokens: 32000, stream: true, messages: [{role: "user", content}]};
+        const h = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2026-10-21", "anthropic-dangerous-direct-browser-access": "true"};
+        // if a safety check declines, the API retries on a fallback model by itself
+        if (/^claude-(opus-5|sonnet-5-5|fable)/.test(model)) { body.fallbacks = "default"; h["anthropic-beta"] = "server-side-fallback-2026-07-01"; }
+        r = await fetch("https://api.anthropic.com/v1/messages", {method: "POST", headers: h, body: JSON.stringify(body), signal});
+        if (!r.ok) throw await apiErr(r, prov);
+        // read the stream: text pieces come in "content_block_delta" events
+        const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "", out = "", stop = "";
+        for (;;) {
+          const {done, value} = await rd.read(); if (done) break;
+          buf += dec.decode(value, {stream: true});
+          let i; while ((i = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+            if (!line.startsWith("data:")) continue;
+            let ev; try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
+            if (ev.type === "content_block_delta" && ev.delta && ev.delta.type === "text_delta") out += ev.delta.text;
+            else if (ev.type === "message_delta" && ev.delta && ev.delta.stop_reason) stop = ev.delta.stop_reason;
+            else if (ev.type === "error") { const er = new Error("Claude: " + ((ev.error && ev.error.message) || "error")); er.retry = /overloaded/i.test(JSON.stringify(ev.error || "")); throw er; }
+          }
+        }
+        if (stop === "refusal") throw new Error("Claude no ha querido responder a esta parte.");
+        if (stop === "max_tokens") throw new Error("La respuesta era demasiado larga y se ha cortado.");
+        return out;
+      }
+      if (prov === "openai" || prov === "openrouter") {
+        const or = prov === "openrouter";
+        const content = files.length ? [{type: "text", text}].concat(files.map(f => f.mime === "application/pdf" ? {type: "file", file: {filename: f.name || "documento.pdf", file_data: "data:application/pdf;base64," + f.b64}} : {type: "image_url", image_url: {url: "data:" + f.mime + ";base64," + f.b64}})) : text;
+        const body = {model, messages: [{role: "user", content}]}; if (wantJSON && !or) body.response_format = {type: "json_object"};
+        const h = {"Content-Type": "application/json", Authorization: "Bearer " + key};
+        if (or) { h["HTTP-Referer"] = "https://clarea.dev"; h["X-Title"] = "Clarea"; }
+        r = await fetch(or ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions", {method: "POST", headers: h, body: JSON.stringify(body), signal});
+        if (!r.ok) throw await apiErr(r, prov);
+        const j = await r.json(), ch = j.choices && j.choices[0];
+        if (!ch && j.error) { const er = new Error("OpenRouter: " + (j.error.message || "error")); er.retry = true; er.why = "El modelo de OpenRouter no ha respondido"; throw er; }
+        if (ch && ch.finish_reason === "length") throw new Error("La respuesta era demasiado larga y se ha cortado.");
+        return (ch && ch.message && ch.message.content) || "";
+      }
       const body = {contents: [{role: "user", parts: files.map(f => ({inline_data: {mime_type: f.mime, data: f.b64}})).concat([{text}])}]}; if (wantJSON) body.generationConfig = {responseMimeType: "application/json"};
       r = await fetch(GEMINI + "/v1beta/models/" + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(key), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body), signal});
       if (!r.ok) throw await apiErr(r, prov);
@@ -788,7 +819,7 @@ window.CLAI = (function () {
     const cf = cfg(), prov = cf.prov;
     await toLite();
     let alts = []; try { const list = await listModels(prov, cf.keys[prov]); const now = cfg().models[prov];
-      alts = list.filter(m => m !== now && /flash/.test(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m)).slice(0, 2); } catch (e) {}
+      alts = prov === "openrouter" ? list.filter(m => m !== now).slice(0, 2) : list.filter(m => m !== now && /flash/.test(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m)).slice(0, 2); } catch (e) {}
     const k = window.clareaPushK ? await window.clareaPushK() : null;
     const r = await fetch(PUSHURL() + "/gen", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({prov, model: cfg().models[prov], alts, key: cf.keys[prov], k, title: o.title, url: o.url, parts: o.parts})});
@@ -819,7 +850,7 @@ window.CLAI = (function () {
       const parts = q.ids.map(id => { const j = jobs.find(x => x.id === id); return {id, text: prompt(c, j)}; });
       // other models of the SAME AI, in case the chosen one is saturated (never another AI)
       let alts = []; try { const list = await listModels(prov, cf.keys[prov]); const now = cfg().models[prov];
-        alts = list.filter(m => m !== now && /flash/.test(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m)).slice(0, 2); } catch (e) {}
+        alts = prov === "openrouter" ? list.filter(m => m !== now).slice(0, 2) : list.filter(m => m !== now && /flash/.test(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m)).slice(0, 2); } catch (e) {}
       const k = window.clareaPushK ? await window.clareaPushK() : null;
       const r = await fetch(PUSHURL() + "/gen", {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({prov, model: cfg().models[prov], alts, key: cf.keys[prov], k, title: q.name, url: "proyecto.html?id=" + encodeURIComponent(q.pid), parts})});
@@ -951,14 +982,14 @@ window.CLAI = (function () {
   }
   // «Seguir con otro modelo»: the next «flash» model not tried yet, and the generation goes on where it stopped
   async function nextModel(tried) {
-    const c = cfg(), prov = c.prov; if (prov !== "gemini" || !c.keys || !c.keys[prov]) return null;
+    const c = cfg(), prov = c.prov; if ((prov !== "gemini" && prov !== "openrouter") || !c.keys || !c.keys[prov]) return null;
     const list = await listModels(prov, c.keys[prov]);
     const ok = m => !tried.includes(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
     // «flash» models have free use: the full one first, then «lite», then anything else
-    return list.find(m => ok(m) && /flash$/.test(m)) || list.find(m => ok(m) && /flash/.test(m)) || list.find(ok) || null;
+    return prov === "openrouter" ? list.find(m => !tried.includes(m)) || null : list.find(m => ok(m) && /flash$/.test(m)) || list.find(m => ok(m) && /flash/.test(m)) || list.find(ok) || null;
   }
   async function switchModel(pid) {
-    const c = cfg(), prov = c.prov; if (prov !== "gemini" || !c.keys || !c.keys[prov]) throw new Error("Cambia el modelo en la pestaña IA.");
+    const c = cfg(), prov = c.prov; if ((prov !== "gemini" && prov !== "openrouter") || !c.keys || !c.keys[prov]) throw new Error("Cambia el modelo en la pestaña IA.");
     const q = qGet(), tried = ((q && q.tried) || []).concat([c.models[prov]]);
     const next = await nextModel(tried);
     if (!next) throw new Error("No quedan más modelos gratis de " + PROV[prov].t + " para probar hoy. Vuelve mañana.");
@@ -1164,7 +1195,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  return {chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
