@@ -543,16 +543,78 @@ window.CLAI = (function () {
   const fresh = q => q && q.beat && Date.now() - q.beat < 20000;
   const emit = () => { try { window.dispatchEvent(new CustomEvent("clarea-ai", {detail: qGet()})); } catch (e) {} paintPill(); };
   // is a generation going on (here or in another open page of Clarea)?
-  const busy = () => { const q = qGet(); return !!(q && !q.finished && (runningHere || fresh(q))); };
+  const busy = () => { const q = qGet(); return !!(q && !q.finished && (q.cloud || runningHere || fresh(q))); };
   function start(pid, ids) {
     const c = ctx(pid); if (!c) return;
     const all = buildJobs(c), todo = ids && ids.length ? ids : all.filter(j => !isDone(c, j)).map(j => j.id);
     if (!todo.length) return;
     askNotify();
     qSet({pid, name: c.P.name, subj: c.P.subj, ids: todo, all: todo.slice(), total: todo.length, ok: 0, err: {}, cur: null, wait: null, started: Date.now(), beat: 0});
-    run();
+    if (cfg().cloud && PUSHURL()) cloudStart(); else run();
   }
-  function stop() { const q = qGet(); if (q) { q.stop = true; qSet(q); } emit(); }
+  function stop() {
+    const q = qGet(); if (q) { q.stop = true; if (q.cloud) { cloudCancel(q.cloud); q.finished = Date.now(); } qSet(q); }
+    emit();
+  }
+
+  /* ---------- in the cloud: the Clarea server generates with Clarea closed, and this collects the results ---------- */
+  const PUSHURL = () => ((window.CLAREA_PUSH || {}).url || "").replace(/\/$/, "");
+  async function cloudStart() {
+    let q = qGet(); const c = ctx(q.pid), cf = cfg(), prov = cf.prov, jobs = buildJobs(c);
+    try {
+      await toLite();
+      const parts = q.ids.map(id => { const j = jobs.find(x => x.id === id); return {id, text: prompt(c, j)}; });
+      // other models of the SAME AI, in case the chosen one is saturated (never another AI)
+      let alts = []; try { const list = await listModels(prov, cf.keys[prov]); const now = cfg().models[prov];
+        alts = prov === "openrouter" ? list.filter(m => m !== now).slice(0, 2) : list.filter(m => m !== now && /flash/.test(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m)).slice(0, 2); } catch (e) {}
+      const k = window.clareaPushK ? await window.clareaPushK() : null;
+      const r = await fetch(PUSHURL() + "/gen", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({prov, model: cfg().models[prov], alts, key: cf.keys[prov], k, title: q.name, url: "proyecto.html?id=" + encodeURIComponent(q.pid), parts})});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(r.status === 413 ? "El proyecto es demasiado grande para generarlo en la nube." : "error " + r.status);
+      q = qGet(); if (!q) return;
+      q.cloud = {id: j.id, s: j.secret}; q.cloudAt = Date.now(); q.push = !!k; qSet(q); emit();
+      if (window.clareaToast) window.clareaToast(k ? "Generando en la nube: ya puedes cerrar Clarea. Te avisaremos al terminar." : "Generando en la nube: puedes cerrar Clarea (activa los avisos para saber cuándo acaba).");
+      cloudPoll();
+    } catch (e) {
+      // the server could not take it: it is done here, as always
+      q = qGet(); if (q) { q.cloudFail = e.message || String(e); qSet(q); }
+      if (window.clareaToast) window.clareaToast("No se ha podido generar en la nube; se hace aquí, con Clarea abierta.");
+      run();
+    }
+  }
+  function cloudCancel(cl) { try { fetch(PUSHURL() + "/gen/" + cl.id + "/cancel", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({s: cl.s})}); } catch (e) {} }
+  let pollT = 0, polling = false;
+  async function cloudPoll() {
+    clearTimeout(pollT);
+    let q = qGet(); if (!q || !q.cloud || q.finished || polling) return;
+    polling = true;
+    try {
+      const c = ctx(q.pid); if (!c) return;
+      const jobs = buildJobs(c), have = q.all.filter(id => { const j = jobs.find(x => x.id === id); return j && isDone(c, j); });
+      const r = await fetch(PUSHURL() + "/gen/" + q.cloud.id + "?s=" + encodeURIComponent(q.cloud.s) + "&have=" + encodeURIComponent(have.join(",")));
+      if (r.status === 404) { q = qGet(); q.fatal = "El trabajo en la nube ya no existe. Vuelve a generar lo que falta."; q.finished = Date.now(); qSet(q); emit(); return; }
+      const g = await r.json();
+      for (const x of g.parts) {
+        const j = jobs.find(y => y.id === x.id); if (!j) continue;
+        if (x.res) { try { applyResult(ctx(q.pid), j, parseJSON(x.res)); } catch (e) { q = qGet(); q.err[x.id] = "La respuesta de la IA no era válida: " + (e.message || e); qSet(q); } }
+        else if (x.st === "err" || x.st === "stop") { q = qGet(); q.err[x.id] = x.err || "No se ha podido generar."; qSet(q); }
+      }
+      q = qGet(); const c2 = ctx(q.pid), jobs2 = buildJobs(c2);
+      q.ids = q.all.filter(id => { const j = jobs2.find(x => x.id === id); return j && !isDone(c2, j); });
+      q.ok = q.total - q.ids.length; q.ids = q.ids.filter(id => !q.err[id]).concat(q.ids.filter(id => q.err[id]));
+      const run_ = g.parts.find(x => x.st === "wait");
+      q.cur = run_ ? run_.id : null; q.curTitle = run_ ? jobTitle(c2, jobs2.find(x => x.id === run_.id) || {kind: "gloss"}) : null;
+      q.waitWhy = run_ && run_.err ? "En la nube: la IA no ha respondido bien, se reintentará" : null; q.wait = null;
+      if (g.switched) q.switched = g.switched;
+      if (g.fatal) q.fatal = g.fatal;
+      if (g.done) { q.finished = Date.now(); qSet(q); cloudCancel(q.cloud); finishedNotice(q, true); }
+      else qSet(q);
+      if (typeof window.clareaRefresh === "function") try { window.clareaRefresh(); } catch (e) {}
+      emit();
+    } catch (e) { /* no internet: try again later */ }
+    finally { polling = false; q = qGet(); if (q && q.cloud && !q.finished) pollT = setTimeout(cloudPoll, 20000); }
+  }
   function dismiss() { qSet(null); emit(); }
   async function toLite() {
     const c = cfg(); if (c.liteMoved || c.prov !== "gemini" || !c.models || !/^gemini-[\d.]+-flash$/.test(c.models.gemini || "")) return;
@@ -564,6 +626,7 @@ window.CLAI = (function () {
     if (runningHere) return;
     let q = qGet();
     if (!q || q.finished || q.stop || !ready()) return;
+    if (q.cloud) { cloudPoll(); return; }
     await toLite();
     if (fresh(q)) return;                     // another open page of Clarea is already doing it
     runningHere = true; wakeOn(); q.paused = null; q.beat = Date.now(); qSet(q); emit();
@@ -618,6 +681,7 @@ window.CLAI = (function () {
   function resume() {
     const q = qGet();
     if (!q || q.finished || q.stop) { paintPill(); return; }
+    if (q.cloud) { cloudPoll(); return; }
     // the page that was generating was just closed: its "still alive" mark fades in a few seconds, then this page takes over
     if (fresh(q) && !runningHere) { paintPill(); clearTimeout(resumeT); resumeT = setTimeout(resume, Math.max(1000, 21000 - (Date.now() - q.beat))); return; }
     run();
@@ -660,12 +724,12 @@ window.CLAI = (function () {
       else new Notification(title, opts);
     } catch (e) {}
   }
-  function finishedNotice(q) {
+  function finishedNotice(q, cloud) {
     const nErr = Object.keys(q.err).length, url = "proyecto.html?id=" + encodeURIComponent(q.pid);
     if (q.stop) return;
     const title = q.fatal ? "No se ha podido terminar" : nErr ? "Generado con avisos" : "✓ Proyecto generado";
     const body = q.fatal ? q.fatal : "«" + q.name + "» de " + q.subj + (nErr ? ": " + q.ok + " partes hechas y " + nErr + " con error." : " ya tiene sus explicaciones, glosario y exámenes.");
-    systemNotify(title, body, url);
+    if (!(cloud && q.push)) systemNotify(title, body, url);
     if (window.clareaNotify) window.clareaNotify({kind: q.fatal || (nErr && !q.ok) ? "bad" : nErr ? "warn" : "ok", title: title.replace(/^✓ /, ""), body, url});
     if (window.clareaToast) window.clareaToast(q.fatal ? "No se ha podido terminar «" + q.name + "»." : "«" + q.name + "» ya está generado.");
   }
