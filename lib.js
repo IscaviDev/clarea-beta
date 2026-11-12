@@ -493,6 +493,12 @@ window.CLAI = (function () {
     Object.keys(r.parts || {}).forEach(p => { try { applyPart(p, r.parts[p]); n++; } catch (e) { bad.push(p); } A.add(p); });
     return {n, bad, saved: (r.saved || []).length, total: r.total || 0, done: (r.saved || []).length >= (r.total || 1)};
   }
+  // how far a task sent to Claude is, without bringing its parts again (for «Para hoy»); have: the parts already counted
+  async function mcpStatus(id, have) {
+    const r = await mcpPost("/mcp-res", {id, have: have || []});
+    if (r.gone) return {gone: true};
+    return {saved: (r.saved || []).length, savedIds: r.saved || [], total: r.total || 0, read: r.read || 0};
+  }
   const MCP_SAY = "Prepara lo que tengo pendiente en Clarea";
   // Claude opens with the message already written: the student only taps «send» (Claude doesn't let a link send it)
   const MCP_URL = "https://claude.ai/new?q=" + encodeURIComponent(MCP_SAY);
@@ -1165,6 +1171,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
