@@ -244,7 +244,7 @@ window.CLAI = (function () {
   function cfg() {
     try {
       const own = JSON.parse(localStorage.getItem(U() + "clarea-ai"));
-      if (own) return own;
+      if (own) { own.prov = "gemini"; return own; }          // Clarea only offers Gemini as «your AI» now
       const old = JSON.parse(localStorage.getItem("clarea-ai"));            // before: kept only on this device
       if (old && window.PJ6USER) { old.t = Date.now(); localStorage.setItem(U() + "clarea-ai", JSON.stringify(old)); localStorage.removeItem("clarea-ai"); }
       return old || {};
@@ -393,7 +393,7 @@ window.CLAI = (function () {
       + '</ol>';
     if (total > 1) h += '<div class="mcpbar" role="progressbar" aria-valuemin="0" aria-valuemax="' + total + '" aria-valuenow="' + n + '" aria-label="Partes guardadas"><i style="width:' + Math.round(n / total * 100) + '%"></i></div>'
       + '<div class="mcpparts">' + titles.map(x => '<span class="' + (saved.includes(x[0]) ? 'ok' : '') + '">' + (saved.includes(x[0]) ? '✓ ' : '') + escH(x[1]) + '</span>').join("") + '</div>';
-    if (!read && !n && Date.now() - sent > 3 * 60000) h += '<p class="mcpwarn">¿No pasa nada? En Claude, toca <b>«+» → Conectores</b> y comprueba que <b>Clarea</b> está activado; luego vuelve a abrir Claude desde aquí y pulsa enviar. La primera vez, dale a <b>«Permitir siempre»</b>.</p>';
+    if (!read && !n && Date.now() - sent > 3 * 60000) h += '<p class="mcpwarn">¿No pasa nada? En Claude, toca <b>«+» → Conectores</b> y comprueba que <b>Clarea</b> está activado; luego toca «Abrir Claude otra vez» y pulsa enviar. La primera vez, dale a <b>«Permitir siempre»</b>.</p>';
     return '<div class="mcpprog" data-mcpprog="' + escH(id) + '" aria-live="polite">' + h + '</div>';
   }
   function mcpPaint(id) { document.querySelectorAll('[data-mcpprog="' + id + '"]').forEach(el => { el.outerHTML = mcpProgressHtml(id); }); }
@@ -409,6 +409,41 @@ window.CLAI = (function () {
   const MCP_SAY = "Prepara lo que tengo pendiente en Clarea";
   // Claude opens with the message already written: the student only taps «send» (Claude doesn't let a link send it)
   const MCP_URL = "https://claude.ai/new?q=" + encodeURIComponent(MCP_SAY);
+  const MCP_APP = "claude://claude.ai/new?q=" + encodeURIComponent(MCP_SAY);
+  const onPhone = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  function openLink(u) { const a = document.createElement("a"); a.href = u; a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove(); }
+  /* open Claude with the message already written: the app if this device has it, if not the web.
+     Phone: claude.ai/new is one of the links the Claude app takes, so the system opens the app if it is installed (if not, the web).
+     Computer: the app answers «claude://»; if nothing takes it in a moment, the web opens (and this device remembers it for a week) */
+  function mcpOpenClaude(msg) {
+    const WEB = msg ? "https://claude.ai/new?q=" + encodeURIComponent(msg.slice(0, 12000)) : MCP_URL, APP = msg ? "claude://claude.ai/new?q=" + encodeURIComponent(msg.slice(0, 12000)) : MCP_APP;
+    if (onPhone()) { openLink(WEB); return; }
+    let web = 0; try { web = +localStorage.getItem("clarea-claudeweb") || 0; } catch (e) {}
+    if (Date.now() - web < 7 * 864e5) { openLink(WEB); return; }
+    let left = false; const went = () => { left = true; };
+    window.addEventListener("blur", went); document.addEventListener("visibilitychange", went);
+    if (/Firefox\//.test(navigator.userAgent)) { const f = document.createElement("iframe"); f.style.display = "none"; f.src = APP; document.body.appendChild(f); setTimeout(() => f.remove(), 3000); }
+    else location.href = APP;
+    setTimeout(() => {
+      window.removeEventListener("blur", went); document.removeEventListener("visibilitychange", went);
+      if (left) return;                                                       // the app (or the browser asking to open it) took it
+      try { localStorage.setItem("clarea-claudeweb", String(Date.now())); } catch (e) {}
+      openLink(WEB);
+    }, 1500);
+  }
+  /* «Enviar a Claude»: a notice first (unless the student said not to ask again), then Claude opens and the task goes */
+  async function mcpGo(what, run, msg) {
+    const c = cfg();
+    if (!c.mcpNoAsk && window.clareaConfirm) {
+      let never = false;
+      const yes = await window.clareaConfirm({info: true, title: "Vas a abrir Claude", ok: "Abrir Claude", cancel: "Cancelar",
+        html: "Clarea envía " + escH(what) + " a Claude y lo abre " + (onPhone() ? "(la app, si la tienes)" : "(la app, si la tienes; si no, la web)") + " con el mensaje ya escrito. Allí solo tienes que <b>pulsar enviar</b>. " + (msg ? "Claude te responde allí, y la respuesta también llegará aquí." : "Luego vuelve a Clarea: lo verás llegar."),
+        check: "No volver a preguntar", onCheck: v => { never = v; }});
+      if (!yes) return false;
+      if (never) { const x = cfg(); x.mcpNoAsk = true; cfgSet(x); }
+    }
+    mcpOpenClaude(msg); run(); return true;
+  }
   // a project as a task for Claude: the parts still to do, and the code once
   function mcpProjectTask(c, jobs) {
     return {id: "p-" + c.pid, kind: "proyecto", title: c.P.name + " (" + c.P.subj + ")",
@@ -931,26 +966,59 @@ window.CLAI = (function () {
     if (document.querySelector(".chatw")) return;
     const K = "clarea-chat-" + o.key, load_ = () => (lget(K) || {msgs: []}).msgs || [];
     let msgs = load_(), busyNow = false;
+    // with the Clarea connector, the question can go to Claude (the student's account): it answers there, and the answer comes here too
+    const TID = "c-" + String(o.key).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 60);
+    const viaClaude = () => mcpOn() && (cfg().chatVia === "claude" || (cfg().chatVia !== "gemini") || !ready());
+    let pend = (lget(K) || {}).pending || null, pollT = 0;
     const w = document.createElement("div"); w.className = "chatw"; w.setAttribute("role", "dialog"); w.setAttribute("aria-modal", "true"); w.setAttribute("aria-label", "Pregúntale a tu IA");
     w.innerHTML = '<div class="chatp"><div class="chath"><div><b>Pregúntale a tu IA</b><small>' + esc(o.title) + '</small></div><button type="button" class="topx chatx" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>'
+      + '<div class="chatvia" role="group" aria-label="Quién responde" hidden><span>Responde:</span><button type="button" data-via="claude">Claude</button><button type="button" data-via="gemini">Gemini</button></div>'
       + '<div class="chatm" aria-live="polite"></div><form class="chatf"><textarea rows="2" placeholder="' + esc(o.placeholder || "Pregunta lo que no entiendas…") + '" aria-label="Tu pregunta"></textarea><button class="btn" type="submit">Enviar</button></form></div>';
     const box = w.querySelector(".chatm"), form = w.querySelector("form"), ta = form.querySelector("textarea");
+    const via = w.querySelector(".chatvia");
+    const paintVia = () => { if (!via) return; via.hidden = !(mcpOn() && ready()); via.querySelectorAll("[data-via]").forEach(b => { const on = (b.dataset.via === "claude") === viaClaude(); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); }); };
     const paint = () => {
-      box.innerHTML = (msgs.length ? "" : '<p class="chathint">' + esc(o.hint || "Pregunta lo que quieras: tu IA responde con este contenido delante.") + (ready() ? "" : " <b>Primero conecta tu IA en Mi cuenta → Configuración.</b>") + '</p>')
+      paintVia();
+      box.innerHTML = (msgs.length ? "" : '<p class="chathint">' + esc(o.hint || "Pregunta lo que quieras: tu IA responde con este contenido delante.") + (ready() || mcpOn() ? "" : " <b>Primero conecta Claude o pon tu clave de Gemini en Mi cuenta → Configuración.</b>") + '</p>')
         + msgs.map(m => '<div class="chatb ' + (m.r === "u" ? "me" : "ai") + '">' + (m.r === "u" ? esc(m.t).replace(/\n/g, "<br>") : chatFmt(m.t)) + '</div>').join("")
         + (busyNow ? '<div class="chatb ai wait"><i></i><i></i><i></i></div>' : "")
+        + (pend ? '<div class="chatb ai claude"><b>Pregunta enviada a Claude.</b> Pulsa enviar en Claude: te responde allí, y su respuesta aparecerá aquí también. <button type="button" class="chatreopen">Abrir Claude otra vez</button> <button type="button" class="chatnopend">Dejar de esperar</button></div>' : "")
         + (msgs.length ? '<button type="button" class="chatclear">Borrar la conversación</button>' : "");
       box.scrollTop = box.scrollHeight;
     };
-    const save = () => lset(K, {t: Date.now(), msgs: msgs.slice(-40)});
+    const save = () => lset(K, {t: Date.now(), msgs: msgs.slice(-40), pending: pend});
+    // Claude's answer, when it saves it with clarea_guardar
+    const poll = async () => {
+      clearTimeout(pollT); if (!pend || !document.body.contains(w)) return;
+      try {
+        const st = await mcpCollect(pend.id, (p, data) => { const t = data && (data.texto || data.text || data.respuesta); if (t) msgs.push({r: "a", t: String(t).slice(0, 8000), by: "claude"}); });
+        if (st.n || st.done || st.gone) { if (st.done) mcpDrop(pend.id); pend = null; save(); paint(); return; }
+      } catch (e) {}
+      pollT = setTimeout(poll, 4000);
+    };
     const close = () => { w.classList.add("closing"); setTimeout(() => w.remove(), 160); };
     w.addEventListener("click", ev => {
       if (ev.target === w || ev.target.closest(".chatx")) close();
-      else if (ev.target.closest(".chatclear")) { msgs = []; save(); paint(); }
+      else if (ev.target.closest(".chatclear")) { msgs = []; pend = null; save(); paint(); }
+      else if (ev.target.closest(".chatreopen") && pend) mcpOpenClaude(pend.msg);
+      else if (ev.target.closest(".chatnopend")) { if (pend) mcpDrop(pend.id); pend = null; save(); paint(); }
+      else { const v = ev.target.closest("[data-via]"); if (v) { const c = cfg(); c.chatVia = v.dataset.via; cfgSet(c); paint(); } }
     });
     ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.shiftKey && !/Android|iPhone|iPad/.test(navigator.userAgent)) { ev.preventDefault(); form.requestSubmit(); } });
     form.addEventListener("submit", async ev => {
       ev.preventDefault(); const q = ta.value.trim(); if (!q || busyNow) return;
+      if (viaClaude()) {
+        const hist0 = msgs.slice(-8).map(m => (m.r === "u" ? "Estudiante: " : "Respuesta: ") + m.t).join("\n\n");
+        const msg = q + "\n\n(Pregunta desde Clarea: lee su contexto con la herramienta clarea_leer, tarea «" + TID + "».)";
+        await mcpGo("tu pregunta", () => {
+          msgs.push({r: "u", t: q}); ta.value = ""; pend = {id: TID, msg, t: Date.now()}; save(); paint();
+          mcpPush({id: TID, kind: "pregunta", title: "Pregunta: " + o.title,
+            intro: "El estudiante te ha hecho una pregunta desde Clarea, sobre este contenido. Respóndele en el chat, en español, claro y breve, como un profesor que le ayuda a preparar el examen; con ejemplos del contenido cuando sirva. Después guarda tu respuesta con clarea_guardar (parte «respuesta», resultado {\"texto\": \"tu respuesta\"}) para que también la vea en Clarea.",
+            parts: [{id: "respuesta", title: "Respuesta", instructions: "Pregunta: " + q + (hist0 ? "\n\nConversación anterior:\n" + hist0 : "")}], context: String(o.context || "").slice(0, 400000)})
+            .then(poll, x => { pend = null; msgs.push({r: "a", t: "No se ha podido enviar a Claude: " + (x.message || x)}); save(); paint(); });
+        }, msg);
+        return;
+      }
       if (!ready()) { paint(); return; }
       msgs.push({r: "u", t: q}); ta.value = ""; busyNow = true; save(); paint();
       const hist = msgs.slice(-10).map(m => (m.r === "u" ? "Estudiante: " : "Tú: ") + m.t).join("\n\n");
@@ -959,7 +1027,11 @@ window.CLAI = (function () {
       catch (x) { msgs.push({r: "a", t: "No he podido responder: " + (errEs ? errEs(x.message || x) : (x.message || x))}); }
       busyNow = false; msgs = msgs.slice(-40); save(); paint();
     });
-    document.body.appendChild(w); paint(); ta.focus();
+    document.body.appendChild(w); paint(); ta.focus(); if (pend) poll();
+    if (!document.getElementById("chatviacss")) { const st = document.createElement("style"); st.id = "chatviacss";
+      st.textContent = '.chatvia{display:flex;align-items:center;gap:6px;padding:0 14px 8px;font-size:13px;color:var(--muted)}.chatvia[hidden]{display:none}.chatvia button{font:inherit;font-size:13px;font-weight:700;color:var(--fg);background:var(--surface);border:1.5px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer}.chatvia button.on{background:var(--accent);border-color:var(--accent);color:#fff}'
+        + '.chatb.claude{border:1.5px dashed var(--accent)}.chatb.claude button{font:inherit;font-size:13px;font-weight:700;color:var(--accent-ink,var(--accent));background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;margin-right:8px}';
+      document.head.appendChild(st); }
   }
 
   /* ---------- notices ---------- */
@@ -1034,6 +1106,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
