@@ -331,6 +331,46 @@ window.CLAI = (function () {
     if (depth > 0 && start >= 0) { const inner = jsonBlocks(t.slice(start + 1)); if (inner.length) out.push({__partial: inner}); }
     return out;
   }
+  // one part's instructions without the code (the code goes once, at the end)
+  function partText(c, j) {
+    let t = prompt(c, j).slice(intro(c).length);
+    if (j.kind !== "git") { const k = t.search(/\n\nCódigo/); if (k > 0) t = t.slice(0, k); }
+    t = t.split(JSONONLY).join("Su objeto JSON.");
+    if (j.kind === "code") t += "\nArchivos de esta parte (están en el código del final): " + j.parts.map(x => x.p + " (líneas " + x.from + "-" + x.to + ")").join(", ") + ".";
+    return t;
+  }
+  /* ---------- the Clarea connector for Claude: Claude works with the student's own subscription ---------- */
+  const mcpKey = () => (cfg().mcp || {}).k || "";
+  const mcpOn = () => /^[A-Za-z0-9_-]{32}$/.test(mcpKey());
+  const mcpUrl = () => PUSHURL() + "/mcp/" + mcpKey();
+  const randKey = () => btoa(String.fromCharCode.apply(null, crypto.getRandomValues(new Uint8Array(24)))).replace(/\+/g, "-").replace(/\//g, "_");
+  async function mcpPost(path, body) {
+    const r = await fetch(PUSHURL() + path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(Object.assign({k: mcpKey()}, body))});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 413 ? "Es demasiado grande para enviarlo a Claude." : (r.status === 404 || (r.status === 400 && j.error === "key")) ? "El servidor de Clarea aún no tiene el conector (falta desplegarlo)." : "No se ha podido (" + (j.error || r.status) + ").");
+    return j;
+  }
+  async function mcpConnect() { const c = cfg(); c.mcp = {k: randKey(), t: Date.now()}; cfgSet(c); await mcpPost("/mcp-hello", {}); return mcpUrl(); }
+  async function mcpDisconnect() { try { await mcpPost("/mcp-forget", {}); } catch (e) {} const c = cfg(); delete c.mcp; cfgSet(c); }
+  const mcpPush = task => mcpPost("/mcp-push", {task});
+  const mcpDrop = id => mcpPost("/mcp-drop", {id}).catch(() => {});
+  const mcpApplied = {};
+  // what Claude saved: each new part goes through applyPart(partId, data); says how far it is
+  async function mcpCollect(id, applyPart) {
+    const A = mcpApplied[id] || (mcpApplied[id] = new Set()), r = await mcpPost("/mcp-res", {id, have: [...A]});
+    if (r.gone) return {gone: true};
+    let n = 0, bad = [];
+    Object.keys(r.parts || {}).forEach(p => { try { applyPart(p, r.parts[p]); n++; } catch (e) { bad.push(p); } A.add(p); });
+    return {n, bad, saved: (r.saved || []).length, total: r.total || 0, done: (r.saved || []).length >= (r.total || 1)};
+  }
+  const MCP_SAY = "Prepara lo que tengo pendiente en Clarea";
+  // a project as a task for Claude: the parts still to do, and the code once
+  function mcpProjectTask(c, jobs) {
+    return {id: "p-" + c.pid, kind: "proyecto", title: c.P.name + " (" + c.P.subj + ")",
+      intro: intro(c) + "Vas a prepararle el repaso de su proyecto por partes. Para cada parte, crea el objeto JSON exacto que piden sus instrucciones y guárdalo con clarea_guardar. En español; los nombres de código entre « ».",
+      parts: jobs.map(j => ({id: j.id, title: jobTitle(c, j), instructions: partText(c, j)})),
+      context: "### CÓDIGO DEL PROYECTO (cada línea empieza por su número)\n" + summaries(c) + codeBundle(c, 600000)};
+  }
   /* the whole project in ONE message, for a chat (Claude Pro, ChatGPT Plus…): the code once, then every part */
   function promptAll(c, jobs) {
     const tasks = jobs.map(j => {
@@ -949,6 +989,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, callSmart, modelNow, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
