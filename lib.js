@@ -501,8 +501,9 @@ window.CLAI = (function () {
     return e;
   }
   /* files (photos and PDFs) go with the text: [{mime, b64, name}]. All 4 AIs read images and PDFs, each in its own format */
-  async function callOnce(text, wantJSON, files) {
-    const c = cfg(), prov = c.prov, key = c.keys[prov], model = c.models[prov];
+  async function callOnce(text, wantJSON, files, opt) {
+    opt = opt || {};
+    const c = cfg(), prov = c.prov, key = c.keys[prov], model = opt.model || c.models[prov], signal = opt.signal;
     files = files || [];
     let r;
     try {
@@ -512,7 +513,7 @@ window.CLAI = (function () {
         const h = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2026-10-21", "anthropic-dangerous-direct-browser-access": "true"};
         // if a safety check declines, the API retries on a fallback model by itself
         if (/^claude-(opus-5|sonnet-5-5|fable)/.test(model)) { body.fallbacks = "default"; h["anthropic-beta"] = "server-side-fallback-2026-07-01"; }
-        r = await fetch("https://api.anthropic.com/v1/messages", {method: "POST", headers: h, body: JSON.stringify(body)});
+        r = await fetch("https://api.anthropic.com/v1/messages", {method: "POST", headers: h, body: JSON.stringify(body), signal});
         if (!r.ok) throw await apiErr(r, prov);
         // read the stream: text pieces come in "content_block_delta" events
         const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "", out = "", stop = "";
@@ -538,7 +539,7 @@ window.CLAI = (function () {
         const body = {model, messages: [{role: "user", content}]}; if (wantJSON && !or) body.response_format = {type: "json_object"};
         const h = {"Content-Type": "application/json", Authorization: "Bearer " + key};
         if (or) { h["HTTP-Referer"] = "https://clarea.dev"; h["X-Title"] = "Clarea"; }
-        r = await fetch(or ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions", {method: "POST", headers: h, body: JSON.stringify(body)});
+        r = await fetch(or ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions", {method: "POST", headers: h, body: JSON.stringify(body), signal});
         if (!r.ok) throw await apiErr(r, prov);
         const j = await r.json(), ch = j.choices && j.choices[0];
         if (!ch && j.error) { const er = new Error("OpenRouter: " + (j.error.message || "error")); er.retry = true; er.why = "El modelo de OpenRouter no ha respondido"; throw er; }
@@ -546,7 +547,7 @@ window.CLAI = (function () {
         return (ch && ch.message && ch.message.content) || "";
       }
       const body = {contents: [{role: "user", parts: files.map(f => ({inline_data: {mime_type: f.mime, data: f.b64}})).concat([{text}])}]}; if (wantJSON) body.generationConfig = {responseMimeType: "application/json"};
-      r = await fetch(GEMINI + "/v1beta/models/" + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(key), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      r = await fetch(GEMINI + "/v1beta/models/" + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(key), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body), signal});
       if (!r.ok) throw await apiErr(r, prov);
       const j = await r.json(), cand = j.candidates && j.candidates[0];
       if (!cand) throw new Error("Gemini no ha devuelto respuesta" + (j.promptFeedback && j.promptFeedback.blockReason ? " (" + j.promptFeedback.blockReason + ")." : "."));
@@ -559,13 +560,34 @@ window.CLAI = (function () {
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   // busy servers (like Gemini's "high demand" 503) are tried again a few times, waiting longer each time
-  async function callAI(text, wantJSON, onWait, files) {
-    const waits = [10, 30, 60];
+  async function callAI(text, wantJSON, onWait, files, opt) {
+    opt = opt || {};
+    const waits = opt.waits || [10, 30, 60], stopped = () => opt.signal && opt.signal.aborted;
     for (let a = 0; ; a++) {
-      try { return await callOnce(text, wantJSON, files); }
-      catch (e) { if (!e.retry || a >= waits.length) throw e; const w = e.wait || waits[a]; if (onWait) onWait(w, e); await sleep(w * 1000); if (onWait) onWait(0, null); }
+      if (stopped()) throw abortErr();
+      try { return await callOnce(text, wantJSON, files, opt); }
+      catch (e) { if (stopped()) throw abortErr(); if (!e.retry || a >= waits.length) throw e; const w = e.wait || waits[a]; if (onWait) onWait(w, e); await sleep(w * 1000); if (onWait) onWait(0, null); }
     }
   }
+  const abortErr = () => { const e = new Error("Cancelado."); e.aborted = true; return e; };
+  /* one call that doesn't get stuck: if the model is saturated, one short retry and then another model of the SAME AI
+     (never another AI). The default model in Configuración doesn't change. o: {onWait, onSwitch(model), files, signal} */
+  async function callSmart(text, wantJSON, o) {
+    o = o || {};
+    const c = cfg(), prov = c.prov, tried = [c.models[prov]]; let model = c.models[prov];
+    for (let round = 0; round < 4; round++) {
+      try { return await callAI(text, wantJSON, o.onWait, o.files, {model, signal: o.signal, waits: [8]}); }
+      catch (e) {
+        if (e.aborted || (o.signal && o.signal.aborted)) throw abortErr();
+        if (!e.retry) throw e;
+        const next = await nextModel(tried).catch(() => null);
+        if (!next) throw e;
+        tried.push(next); if (o.onSwitch) o.onSwitch(next, model); model = next;
+      }
+    }
+    throw new Error("Tu IA está saturada ahora mismo. Prueba en unos minutos o hazlo con tu chat de IA.");
+  }
+  const modelNow = () => { const c = cfg(); return c.prov && c.models ? c.models[c.prov] || "" : ""; };
 
   /* ---------- the queue: saved on this device, so it survives moving between pages ---------- */
   const QK = () => "clarea-aiq/" + (window.PJ6USER || "_");
@@ -927,6 +949,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, callSmart, modelNow, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
