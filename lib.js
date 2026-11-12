@@ -240,8 +240,17 @@ window.CLAI = (function () {
   // only for testing on this computer: a local stand-in that answers like Gemini
   const GEMINI = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && (function () { try { return localStorage.getItem("clarea-dev-ai"); } catch (e) { return null; } })()) || "https://generativelanguage.googleapis.com";
   const CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
-  function cfg() { try { return JSON.parse(localStorage.getItem("clarea-ai")) || {}; } catch (e) { return {}; } }
-  function cfgSet(c) { try { localStorage.setItem("clarea-ai", JSON.stringify(c)); } catch (e) {} }
+  // the AI settings (keys, models, the default AI) go with the account: synced to every device
+  function cfg() {
+    try {
+      const own = JSON.parse(localStorage.getItem(U() + "clarea-ai"));
+      if (own) return own;
+      const old = JSON.parse(localStorage.getItem("clarea-ai"));            // before: kept only on this device
+      if (old && window.PJ6USER) { old.t = Date.now(); localStorage.setItem(U() + "clarea-ai", JSON.stringify(old)); localStorage.removeItem("clarea-ai"); }
+      return old || {};
+    } catch (e) { return {}; }
+  }
+  function cfgSet(c) { try { c.t = Date.now(); localStorage.setItem(U() + "clarea-ai", JSON.stringify(c)); } catch (e) {} }
   const ready = () => { const c = cfg(); return !!(c.prov && c.keys && c.keys[c.prov] && c.models && c.models[c.prov] && c.ok && c.ok[c.prov] === c.keys[c.prov]); };
 
   /* ---------- a project, read fresh from storage ---------- */
@@ -576,6 +585,20 @@ window.CLAI = (function () {
           q = qGet(); if (!q) break;          // the project was deleted meanwhile
           q.cur = null; q.wait = null;
           if (e.offline) { q.paused = "offline"; qSet(q); break; }      // carries on when internet comes back
+          const busyAI = e.status === 503 || e.status === 529 || (e.status === 429 && !e.quotaKind) || /saturad|overloaded|high demand|muy solicitado/i.test((e.why || "") + " " + (e.detail || "") + " " + e.message);
+          if (busyAI && (q.autoSw || 0) < 2) {
+            const cf = cfg(), from = cf.models && cf.models[cf.prov];
+            let next = null; try { next = await nextModel(((q.tried || []).concat([from]))); } catch (x) {}
+            if (next) {
+              cf.models[cf.prov] = next; cfgSet(cf);
+              q = qGet(); if (!q) break;
+              q.autoSw = (q.autoSw || 0) + 1; q.tried = (q.tried || []).concat([from]); q.switched = {from, to: next, at: Date.now()}; q.lastErr = null; qSet(q);
+              const t = PROV[cf.prov].t + " estaba saturada", b = "Clarea ha cambiado de «" + from + "» a «" + next + "» para seguir generando «" + q.name + "».";
+              if (window.clareaNotify) window.clareaNotify({kind: "info", title: t, body: b, url: "proyecto.html?id=" + encodeURIComponent(q.pid) + "&tab=ia"});
+              if (window.clareaToast) window.clareaToast(t + ": sigo con «" + next + "».");
+              emit(); continue;                                            // the same part, with the new model
+            }
+          }
           q.err[id] = e.message || String(e);
           if (e.quotaKind) { q.fatal = q.err[id]; q.fatalKind = e.quotaKind; delete q.err[id]; qSet(q); break; }    // the part is not wrong: it can be done with another model
           if (/clave|saldo/.test(q.err[id])) { q.fatal = q.err[id]; qSet(q); break; }
@@ -607,12 +630,17 @@ window.CLAI = (function () {
     return (q.waitWhy || "La IA está saturada") + ": " + (left ? "vuelvo a intentarlo en " + left + " s" : "volviendo a intentarlo…");
   }
   // «Seguir con otro modelo»: the next «flash» model not tried yet, and the generation goes on where it stopped
+  async function nextModel(tried) {
+    const c = cfg(), prov = c.prov; if ((prov !== "gemini" && prov !== "openrouter") || !c.keys || !c.keys[prov]) return null;
+    const list = await listModels(prov, c.keys[prov]);
+    const ok = m => !tried.includes(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
+    // «flash» models have free use: the full one first, then «lite», then anything else
+    return prov === "openrouter" ? list.find(m => !tried.includes(m)) || null : list.find(m => ok(m) && /flash$/.test(m)) || list.find(m => ok(m) && /flash/.test(m)) || list.find(ok) || null;
+  }
   async function switchModel(pid) {
     const c = cfg(), prov = c.prov; if ((prov !== "gemini" && prov !== "openrouter") || !c.keys || !c.keys[prov]) throw new Error("Cambia el modelo en la pestaña IA.");
     const q = qGet(), tried = ((q && q.tried) || []).concat([c.models[prov]]);
-    const list = await listModels(prov, c.keys[prov]);
-    const ok = m => !tried.includes(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
-    const next = prov === "openrouter" ? list.find(m => !tried.includes(m)) : list.find(m => ok(m) && /flash$/.test(m)) || list.find(m => ok(m) && /flash/.test(m)) || list.find(ok);   // «flash» models have free use (the full one before «lite»)
+    const next = await nextModel(tried);
     if (!next) throw new Error("No quedan más modelos gratis de " + PROV[prov].t + " para probar hoy. Vuelve mañana.");
     c.models[prov] = next; cfgSet(c);
     const pidNow = pid || (q && q.pid);
@@ -655,7 +683,43 @@ window.CLAI = (function () {
   const boot = () => setTimeout(() => { if (window.PJ6USER) resume(); }, 1200);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 
-  return {PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, isDone, switchModel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+  /* step by step: how to get a key for each AI (open by default while there is no key) */
+  const KEYGUIDE = {
+    gemini: {free: "Gratis, sin tarjeta.", steps: [
+      'Abre <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> e inicia sesión con tu cuenta de Google (la de Gmail).',
+      'Si es la primera vez, acepta las condiciones de Google AI Studio.',
+      'Toca <b>«Crear clave de API»</b> (en inglés, <i>Create API key</i>). Si te pregunta por un proyecto, elige el que te propone o toca «Crear proyecto».',
+      'Cuando aparezca la clave, toca el <b>botón de copiar</b> que hay a su lado. No la selecciones a mano: es muy fácil dejarse un trozo.',
+      'Vuelve a Clarea, pégala en <b>«Clave de Gemini»</b> y toca <b>«Comprobar la clave»</b>.'],
+      tips: ['Si Clarea dice que Google no reconoce la clave, normalmente es que se borró o no se copió entera: vuelve al paso 3 y crea otra.', 'Clarea usa el modelo «Flash-Lite», que tiene mucho más uso gratis (unas 500 peticiones al día) que «Flash» (unas 20). Si se acaba, espera a mañana o toca «Seguir con otro modelo».']},
+    claude: {free: "De pago: unos céntimos por proyecto.", steps: [
+      'Abre <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> y crea una cuenta o inicia sesión.',
+      'En <b>Billing</b>, añade saldo (con unos pocos dólares tienes para muchos proyectos).',
+      'Ve a <b>Settings → API keys</b> y toca <b>«Create Key»</b>. Ponle de nombre «Clarea».',
+      'Copia la clave (empieza por <code>sk-ant-</code>) con el <b>botón de copiar</b>. Solo se enseña una vez: si la pierdes, crea otra.',
+      'Vuelve a Clarea, pégala en <b>«Clave de Claude»</b> y toca <b>«Comprobar la clave»</b>.'],
+      tips: ['Si sale que no tienes saldo, añade saldo en Billing y vuelve a intentarlo.']},
+    openrouter: {free: "Gratis, sin tarjeta (unas 50 peticiones al día).", steps: [
+      'Abre <a href="https://openrouter.ai" target="_blank" rel="noopener">openrouter.ai</a> y crea una cuenta o entra con Google o GitHub.',
+      'Ve a <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">Settings → Keys</a> y toca <b>«Create API Key»</b>. Ponle de nombre «Clarea» y déjalo sin límite de gasto (no vas a gastar: Clarea solo usa modelos gratis).',
+      'Copia la clave (empieza por <code>sk-or-</code>) con el <b>botón de copiar</b>. Solo se enseña una vez: si la pierdes, crea otra.',
+      'Vuelve a Clarea, pégala en <b>«Clave de OpenRouter»</b> y toca <b>«Comprobar la clave»</b>. Clarea elegirá el mejor modelo gratis (los que acaban en «:free»).'],
+      tips: ['Sin pagar nada tienes unas 50 peticiones al día. Si compras 10 $ de saldo una sola vez, sube a unas 1000 al día con los mismos modelos gratis.', 'Los modelos gratis cambian a menudo. Si uno deja de funcionar, toca «Seguir con otro modelo».']},
+    openai: {free: "De pago: unos céntimos por proyecto.", steps: [
+      'Abre <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a> e inicia sesión (no es lo mismo que la suscripción de ChatGPT Plus).',
+      'En <b>Settings → Billing</b>, añade saldo.',
+      'Vuelve a <b>API keys</b> y toca <b>«Create new secret key»</b>. Ponle de nombre «Clarea».',
+      'Copia la clave (empieza por <code>sk-</code>) con el <b>botón de copiar</b>. Solo se enseña una vez: si la pierdes, crea otra.',
+      'Vuelve a Clarea, pégala en <b>«Clave de ChatGPT»</b> y toca <b>«Comprobar la clave»</b>.'],
+      tips: ['Si sale que has llegado al límite o no tienes saldo, revisa Billing en OpenAI.']}
+  };
+  function keyGuide(prov, hasKey){
+    const g = KEYGUIDE[prov]; if (!g) return "";
+    return '<details class="kguide"' + (hasKey ? '' : ' open') + '><summary>Cómo conseguir tu clave de ' + PROV[prov].t + ', paso a paso<small>' + g.free + '</small></summary>'
+      + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
+      + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
+  }
+  return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+          listModels, pickModel, callAI, isDone, switchModel, nextModel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
