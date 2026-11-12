@@ -387,13 +387,13 @@ window.CLAI = (function () {
     const li = (cls, b, sm) => '<li class="' + cls + '"><i aria-hidden="true"></i><span><b>' + b + '</b>' + (sm ? '<small>' + sm + '</small>' : '') + '</span></li>';
     let h = '<ol class="mcpp">'
       + li("ok", "Enviado a Claude", agoTxt(sent))
-      + li(read || n ? "ok" : "now", read || n ? "Claude lo ha abierto" : "Escribe en Claude: «" + escH(MCP_SAY) + "»", read ? agoTxt(read) : n ? "" : "Esperando a que Claude lo abra…")
+      + li(read || n ? "ok" : "now", read || n ? "Claude lo ha abierto" : "En Claude, pulsa enviar", read ? agoTxt(read) : n ? "" : "El mensaje ya está escrito. Esperando a Claude…")
       + li(done ? "ok" : read || n ? "now" : "", "Claude prepara y guarda " + (total > 1 ? "cada parte" : "la hoja"), (total > 1 ? n + " de " + total + " partes" : n ? "guardada" : "aún no") + (eta ? " · " + eta : ""))
       + li(done ? "ok" : "", "Listo en Clarea", done ? "¡Ya lo tienes!" : "Aparecerá aquí solo, sin hacer nada")
       + '</ol>';
     if (total > 1) h += '<div class="mcpbar" role="progressbar" aria-valuemin="0" aria-valuemax="' + total + '" aria-valuenow="' + n + '" aria-label="Partes guardadas"><i style="width:' + Math.round(n / total * 100) + '%"></i></div>'
       + '<div class="mcpparts">' + titles.map(x => '<span class="' + (saved.includes(x[0]) ? 'ok' : '') + '">' + (saved.includes(x[0]) ? '✓ ' : '') + escH(x[1]) + '</span>').join("") + '</div>';
-    if (!read && !n && Date.now() - sent > 3 * 60000) h += '<p class="mcpwarn">¿No pasa nada? En Claude, toca <b>«+» → Conectores</b> y comprueba que <b>Clarea</b> está activado; luego escribe la frase. La primera vez, dale a <b>«Permitir siempre»</b>.</p>';
+    if (!read && !n && Date.now() - sent > 3 * 60000) h += '<p class="mcpwarn">¿No pasa nada? En Claude, toca <b>«+» → Conectores</b> y comprueba que <b>Clarea</b> está activado; luego vuelve a abrir Claude desde aquí y pulsa enviar. La primera vez, dale a <b>«Permitir siempre»</b>.</p>';
     return '<div class="mcpprog" data-mcpprog="' + escH(id) + '" aria-live="polite">' + h + '</div>';
   }
   function mcpPaint(id) { document.querySelectorAll('[data-mcpprog="' + id + '"]').forEach(el => { el.outerHTML = mcpProgressHtml(id); }); }
@@ -407,6 +407,8 @@ window.CLAI = (function () {
     return {n, bad, saved: (r.saved || []).length, total: r.total || 0, done: (r.saved || []).length >= (r.total || 1)};
   }
   const MCP_SAY = "Prepara lo que tengo pendiente en Clarea";
+  // Claude opens with the message already written: the student only taps «send» (Claude doesn't let a link send it)
+  const MCP_URL = "https://claude.ai/new?q=" + encodeURIComponent(MCP_SAY);
   // a project as a task for Claude: the parts still to do, and the code once
   function mcpProjectTask(c, jobs) {
     return {id: "p-" + c.pid, kind: "proyecto", title: c.P.name + " (" + c.P.subj + ")",
@@ -1032,6 +1034,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
