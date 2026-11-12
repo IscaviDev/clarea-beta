@@ -234,7 +234,8 @@ window.CLAI = (function () {
   const PROV = {
     claude: {t: "Claude", s: "Anthropic", url: "https://console.anthropic.com/settings/keys", note: "De pago por uso: unos céntimos por proyecto."},
     openai: {t: "ChatGPT", s: "OpenAI", url: "https://platform.openai.com/api-keys", note: "De pago por uso: unos céntimos por proyecto."},
-    gemini: {t: "Gemini", s: "Google", url: "https://aistudio.google.com/apikey", note: "Tiene un uso gratuito con límites diarios."}
+    gemini: {t: "Gemini", s: "Google", url: "https://aistudio.google.com/apikey", note: "Tiene un uso gratuito con límites diarios."},
+    openrouter: {t: "OpenRouter", s: "Modelos gratis", url: "https://openrouter.ai/settings/keys", note: "Da acceso gratis a varios modelos (unas 50 peticiones al día sin pagar nada)."}
   };
   // only for testing on this computer: a local stand-in that answers like Gemini
   const GEMINI = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && (function () { try { return localStorage.getItem("clarea-dev-ai"); } catch (e) { return null; } })()) || "https://generativelanguage.googleapis.com";
@@ -373,6 +374,19 @@ window.CLAI = (function () {
       if (!r.ok) throw await apiErr(r, prov);
       return ((await r.json()).data || []).map(m => m.id).filter(id => /^(gpt-|o\d|chatgpt)/.test(id) && !/(audio|realtime|image|tts|transcribe|search|embedding|instruct|moderation)/.test(id)).sort().reverse();
     }
+    if (prov === "openrouter") {
+      const k = await fetch("https://openrouter.ai/api/v1/key", {headers: {Authorization: "Bearer " + key}});
+      if (!k.ok) throw await apiErr(k, prov);
+      const r = await fetch("https://openrouter.ai/api/v1/models");
+      if (!r.ok) throw await apiErr(r, prov);
+      const all = ((await r.json()).data || []).filter(m => /:free$/.test(m.id) && !/(vision|image|audio|embed|guard|tts)/i.test(m.id));
+      // big context (whole parts of code fit), full-size models before small or preview ones
+      // size in the name («70b», «550b-a55b»): tiny models write poor explanations
+      const size = m => { const x = m.id.match(/(\d+(?:\.\d+)?)b(?![a-z])/i); return x ? parseFloat(x[1]) : 0; };
+      const score = m => ((m.context_length || 0) >= 128000 ? 4 : 0) - (/(small|mini|lite|lightning|nano|tiny|micro)/i.test(m.id) ? 2 : 0) - (/(preview|beta|exp)/i.test(m.id) ? 1 : 0)
+        - (size(m) && size(m) < 20 ? 2 : 0) + (size(m) >= 100 ? 1 : 0);
+      return all.sort((a, b) => score(b) - score(a) || (b.context_length || 0) - (a.context_length || 0) || (b.created || 0) - (a.created || 0)).map(m => m.id);
+    }
     const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" + encodeURIComponent(key));
     if (!r.ok) throw await apiErr(r, prov);
     return ((await r.json()).models || []).filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /gemini/.test(m.name) && !/(image|tts|audio|embedding|live)/.test(m.name)).map(m => m.name.replace(/^models\//, "")).sort().reverse();
@@ -380,6 +394,7 @@ window.CLAI = (function () {
   function pickModel(prov, list) {
     if (prov === "claude") return list.includes("claude-opus-5-5") ? "claude-opus-5-5" : list[0];
     if (prov === "openai") return list.find(m => /^gpt-\d+(\.\d+)?$/.test(m)) || list.find(m => /^gpt-/.test(m)) || list[0];
+    if (prov === "openrouter") return list[0];                       // already sorted: the free model with the biggest context
     // Gemini: «Flash-Lite» first. Its free use is much bigger (about 500 requests a day, against about 20 for «Flash»)
     const ok = m => !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
     return list.find(m => ok(m) && /^gemini-[\d.]+-flash-lite$/.test(m)) || list.find(m => ok(m) && /flash-lite/.test(m))
@@ -395,6 +410,15 @@ window.CLAI = (function () {
       det.forEach(d => { if (d.retryDelay) after = Math.ceil(parseFloat(d.retryDelay) || 0); });
     } catch (e) {}
     const model = (cfg().models || {})[prov] || "";
+    // OpenRouter: free use per day / per minute, or a free model that is gone
+    if (prov === "openrouter") {
+      let q = null;
+      if (r.status === 429 && /per-day|per day|daily/i.test(m)) { q = new Error("Has gastado el uso gratis de hoy de OpenRouter (unas 50 peticiones al día). Se renueva cada día: sigue mañana, o usa Gemini Flash-Lite, que tiene mucho más."); q.retry = false; q.quotaKind = "day"; }
+      else if (r.status === 429) { q = new Error("OpenRouter: límite por minuto o el modelo gratis está muy solicitado."); q.retry = true; q.wait = Math.min(Math.max(after || 30, 15), 120); q.why = /upstream/i.test(m) ? "El modelo gratis está muy solicitado" : "Límite por minuto del uso gratis de OpenRouter"; }
+      else if (r.status === 404 || /no endpoints/i.test(m)) { q = new Error("Este modelo gratis de OpenRouter ya no está disponible. Cambia a otro y sigue."); q.retry = false; q.quotaKind = "model"; }
+      else if (r.status === 402) { q = new Error("OpenRouter pide saldo para este modelo. Elige uno gratis (los que acaban en «:free»)."); q.retry = false; q.quotaKind = "model"; }
+      if (q) { q.status = r.status; q.detail = m; return q; }
+    }
     // Gemini, too many requests: it can be a limit per minute (wait), per day (tomorrow) or a model with no free use at all
     if (prov === "gemini" && r.status === 429) {
       let q;
@@ -456,11 +480,15 @@ window.CLAI = (function () {
         if (stop === "max_tokens") throw new Error("La respuesta era demasiado larga y se ha cortado.");
         return out;
       }
-      if (prov === "openai") {
-        const body = {model, messages: [{role: "user", content: text}]}; if (wantJSON) body.response_format = {type: "json_object"};
-        r = await fetch("https://api.openai.com/v1/chat/completions", {method: "POST", headers: {"Content-Type": "application/json", Authorization: "Bearer " + key}, body: JSON.stringify(body)});
+      if (prov === "openai" || prov === "openrouter") {
+        const or = prov === "openrouter";
+        const body = {model, messages: [{role: "user", content: text}]}; if (wantJSON && !or) body.response_format = {type: "json_object"};
+        const h = {"Content-Type": "application/json", Authorization: "Bearer " + key};
+        if (or) { h["HTTP-Referer"] = "https://clarea.dev"; h["X-Title"] = "Clarea"; }
+        r = await fetch(or ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions", {method: "POST", headers: h, body: JSON.stringify(body)});
         if (!r.ok) throw await apiErr(r, prov);
         const j = await r.json(), ch = j.choices && j.choices[0];
+        if (!ch && j.error) { const er = new Error("OpenRouter: " + (j.error.message || "error")); er.retry = true; er.why = "El modelo de OpenRouter no ha respondido"; throw er; }
         if (ch && ch.finish_reason === "length") throw new Error("La respuesta era demasiado larga y se ha cortado.");
         return (ch && ch.message && ch.message.content) || "";
       }
@@ -570,12 +598,12 @@ window.CLAI = (function () {
   }
   // «Seguir con otro modelo»: the next «flash» model not tried yet, and the generation goes on where it stopped
   async function switchModel(pid) {
-    const c = cfg(), prov = c.prov; if (prov !== "gemini" || !c.keys || !c.keys[prov]) throw new Error("Cambia el modelo en la pestaña IA.");
+    const c = cfg(), prov = c.prov; if ((prov !== "gemini" && prov !== "openrouter") || !c.keys || !c.keys[prov]) throw new Error("Cambia el modelo en la pestaña IA.");
     const q = qGet(), tried = ((q && q.tried) || []).concat([c.models[prov]]);
     const list = await listModels(prov, c.keys[prov]);
     const ok = m => !tried.includes(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
-    const next = list.find(m => ok(m) && /flash$/.test(m)) || list.find(m => ok(m) && /flash/.test(m)) || list.find(ok);   // «flash» models have free use (the full one before «lite»)
-    if (!next) throw new Error("No quedan más modelos gratis de Gemini para probar hoy. Vuelve mañana.");
+    const next = prov === "openrouter" ? list.find(m => !tried.includes(m)) : list.find(m => ok(m) && /flash$/.test(m)) || list.find(m => ok(m) && /flash/.test(m)) || list.find(ok);   // «flash» models have free use (the full one before «lite»)
+    if (!next) throw new Error("No quedan más modelos gratis de " + PROV[prov].t + " para probar hoy. Vuelve mañana.");
     c.models[prov] = next; cfgSet(c);
     const pidNow = pid || (q && q.pid);
     start(pidNow);
