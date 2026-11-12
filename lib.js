@@ -574,7 +574,7 @@ window.CLAI = (function () {
     if (!todo.length) return;
     askNotify();
     qSet({pid, name: c.P.name, subj: c.P.subj, ids: todo, all: todo.slice(), total: todo.length, ok: 0, err: {}, cur: null, wait: null, started: Date.now(), beat: 0});
-    if (cfg().cloud && PUSHURL()) cloudStart(); else run();
+    if (cloudOn()) cloudStart(); else run();
   }
   function stop() {
     const q = qGet(); if (q && q.remote) { q.stopReq = true; qSet(q); emit(); return; }
@@ -584,6 +584,36 @@ window.CLAI = (function () {
 
   /* ---------- in the cloud: the Clarea server generates with Clarea closed, and this collects the results ---------- */
   const PUSHURL = () => ((window.CLAREA_PUSH || {}).url || "").replace(/\/$/, "");
+  const cloudOn = () => cfg().cloud !== false && !!PUSHURL();          // on by default
+  /* the same cloud job for anything (projects, exam questions): parts = [{id, text}] */
+  async function cloudSubmit(o) {
+    const cf = cfg(), prov = cf.prov;
+    await toLite();
+    let alts = []; try { const list = await listModels(prov, cf.keys[prov]); const now = cfg().models[prov];
+      alts = prov === "openrouter" ? list.filter(m => m !== now).slice(0, 2) : list.filter(m => m !== now && /flash/.test(m) && !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m)).slice(0, 2); } catch (e) {}
+    const k = window.clareaPushK ? await window.clareaPushK() : null;
+    const r = await fetch(PUSHURL() + "/gen", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({prov, model: cfg().models[prov], alts, key: cf.keys[prov], k, title: o.title, url: o.url, parts: o.parts})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 413 ? "Es demasiado grande para la nube." : "error " + r.status);
+    return {id: j.id, s: j.secret, push: !!k, at: Date.now()};
+  }
+  // errors that come back from the cloud, in plain Spanish
+  function errEs(m) {
+    m = String(m || "");
+    if (/API key not valid|API_KEY_INVALID|invalid x-api-key|Incorrect API key|No auth credentials|User not found/i.test(m)) return "Tu IA no reconoce la clave: revísala en Configuración.";
+    if (/expired/i.test(m)) return "La clave ha caducado: pon una nueva en Configuración.";
+    if (/quota|limit|per day|rate/i.test(m)) return "Se ha gastado el uso gratis de tu IA por ahora. Prueba más tarde o mañana.";
+    if (/high demand|overloaded|unavailable|503/i.test(m)) return "Tu IA estaba saturada y no ha respondido.";
+    if (/tardado demasiado|timeout/i.test(m)) return "Tu IA ha tardado demasiado en responder.";
+    return m;
+  }
+  async function cloudFetch(cl, have) {
+    const r = await fetch(PUSHURL() + "/gen/" + cl.id + "?s=" + encodeURIComponent(cl.s) + "&have=" + encodeURIComponent((have || []).join(",")));
+    if (r.status === 404) return {gone: true};
+    if (!r.ok) throw new Error("error " + r.status);
+    return r.json();
+  }
   async function cloudStart() {
     let q = qGet(); const c = ctx(q.pid), cf = cfg(), prov = cf.prov, jobs = buildJobs(c);
     try {
@@ -623,7 +653,7 @@ window.CLAI = (function () {
       for (const x of g.parts) {
         const j = jobs.find(y => y.id === x.id); if (!j) continue;
         if (x.res) { try { applyResult(ctx(q.pid), j, parseJSON(x.res)); } catch (e) { q = qGet(); q.err[x.id] = "La respuesta de la IA no era válida: " + (e.message || e); qSet(q); } }
-        else if (x.st === "err" || x.st === "stop") { q = qGet(); q.err[x.id] = x.err || "No se ha podido generar."; qSet(q); }
+        else if (x.st === "err" || x.st === "stop") { q = qGet(); q.err[x.id] = errEs(x.err) || "No se ha podido generar."; qSet(q); }
       }
       q = qGet(); const c2 = ctx(q.pid), jobs2 = buildJobs(c2);
       q.ids = q.all.filter(id => { const j = jobs2.find(x => x.id === id); return j && !isDone(c2, j); });
@@ -812,6 +842,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, isDone, switchModel, nextModel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
