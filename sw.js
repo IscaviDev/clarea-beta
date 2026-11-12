@@ -2,8 +2,8 @@
    - Each published version has its own cache, filled when the new version is downloaded.
    - The new version waits until the user taps "Actualizar" (message SKIP_WAITING), then the page reloads.
    - Works without internet: everything is answered from the cache. */
-const CACHE = "clarea-20261112111549";
-const CORE = ["./", "./index.html", "./repaso-pj6.html", "./proyecto.html", "./privacidad.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
+const CACHE = "clarea-20261112113453";
+const CORE = ["./", "./index.html", "./repaso-pj6.html", "./proyecto.html", "./privacidad.html", "./lib.js?v=20261112113453", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 function pageKey(req){ const p = new URL(req.url).pathname; return /repaso-pj6\.html$/.test(p) ? "./repaso-pj6.html" : /proyecto\.html$/.test(p) ? "./proyecto.html" : /privacidad\.html$/.test(p) ? "./privacidad.html" : "./index.html"; }
 
@@ -46,6 +46,11 @@ self.addEventListener("fetch", e => {
 });
 
 // tapping a notification opens (or brings to the front) the page it talks about
+// a reminder sent by the Clarea push Worker (arrives also with Clarea closed)
+self.addEventListener("push", e => {
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (x) { d = {title: "Clarea", body: e.data ? e.data.text() : ""}; }
+  e.waitUntil(self.registration.showNotification(d.title || "Clarea", {body: d.body || "", icon: "icon-192.png", badge: "icon-192.png", tag: d.tag || undefined, data: {url: d.url || "./"}}));
+});
 self.addEventListener("notificationclick", e => {
   e.notification.close();
   const url = new URL((e.notification.data && e.notification.data.url) || "./", self.registration.scope).href;
