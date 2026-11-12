@@ -380,7 +380,10 @@ window.CLAI = (function () {
   function pickModel(prov, list) {
     if (prov === "claude") return list.includes("claude-opus-5-5") ? "claude-opus-5-5" : list[0];
     if (prov === "openai") return list.find(m => /^gpt-\d+(\.\d+)?$/.test(m)) || list.find(m => /^gpt-/.test(m)) || list[0];
-    return list.find(m => /^gemini-[\d.]+-flash$/.test(m)) || list.find(m => /flash/.test(m)) || list[0];
+    // Gemini: «Flash-Lite» first. Its free use is much bigger (about 500 requests a day, against about 20 for «Flash»)
+    const ok = m => !/(preview|exp|thinking|image|tts|live|audio|embedding|computer)/.test(m);
+    return list.find(m => ok(m) && /^gemini-[\d.]+-flash-lite$/.test(m)) || list.find(m => ok(m) && /flash-lite/.test(m))
+      || list.find(m => ok(m) && /^gemini-[\d.]+-flash$/.test(m)) || list.find(m => /flash/.test(m)) || list[0];
   }
   async function apiErr(r, prov) {
     let m = "", why = "", quota = "", after = 0;
@@ -504,10 +507,17 @@ window.CLAI = (function () {
   }
   function stop() { const q = qGet(); if (q) { q.stop = true; qSet(q); } emit(); }
   function dismiss() { qSet(null); emit(); }
+  async function toLite() {
+    const c = cfg(); if (c.liteMoved || c.prov !== "gemini" || !c.models || !/^gemini-[\d.]+-flash$/.test(c.models.gemini || "")) return;
+    c.liteMoved = true;
+    try { const list = await listModels("gemini", c.keys.gemini), lite = pickModel("gemini", list); if (/flash-lite/.test(lite)) c.models.gemini = lite; } catch (e) {}
+    cfgSet(Object.assign(cfg(), {liteMoved: true, models: c.models}));
+  }
   async function run() {
     if (runningHere) return;
     let q = qGet();
     if (!q || q.finished || q.stop || !ready()) return;
+    await toLite();
     if (fresh(q)) return;                     // another open page of Clarea is already doing it
     runningHere = true; q.paused = null; q.beat = Date.now(); qSet(q); emit();
     clearInterval(beatT); beatT = setInterval(() => { const x = qGet(); if (x && !x.finished) { x.beat = Date.now(); qSet(x); } }, 5000);
