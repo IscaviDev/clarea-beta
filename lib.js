@@ -354,11 +354,54 @@ window.CLAI = (function () {
   async function mcpDisconnect() { try { await mcpPost("/mcp-forget", {}); } catch (e) {} const c = cfg(); delete c.mcp; cfgSet(c); }
   const mcpPush = task => mcpPost("/mcp-push", {task});
   const mcpDrop = id => mcpPost("/mcp-drop", {id}).catch(() => {});
-  const mcpApplied = {};
+  const mcpApplied = {}, MST = {}, MTITLES = {};
+  const escH = t => String(t == null ? "" : t).replace(/[&<>"]/g, ch => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[ch]));
+  const agoTxt = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "ahora mismo" : m === 1 ? "hace 1 minuto" : m < 60 ? "hace " + m + " minutos" : "hace " + Math.round(m / 60) + " h"; };
+  const minsTxt = ms => { const m = Math.max(1, Math.round(ms / 60000)); return m === 1 ? "1 minuto" : m + " minutos"; };
+  function mcpCss() {
+    if (document.getElementById("mcppcss")) return;
+    const st = document.createElement("style"); st.id = "mcppcss";
+    st.textContent = '.mcpprog{display:flex;flex-direction:column;gap:10px;margin:6px 0 4px}'
+      + '.mcpp{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}'
+      + '.mcpp li{display:flex;gap:10px;align-items:flex-start;margin:0}'
+      + '.mcpp li>i{flex:none;width:20px;height:20px;border-radius:50%;border:2px solid var(--line);box-sizing:border-box;margin-top:1px;display:flex;align-items:center;justify-content:center;font-style:normal;font-size:11px;font-weight:900;color:#fff}'
+      + '.mcpp li.ok>i{background:#2e9d5b;border-color:#2e9d5b}.mcpp li.ok>i::after{content:"✓"}'
+      + '.mcpp li.now>i{border-color:var(--accent);border-top-color:transparent;animation:mcpspin 1s linear infinite}'
+      + '@keyframes mcpspin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){.mcpp li.now>i{animation:none;border-top-color:var(--accent)}}'
+      + '.mcpp li>span{display:flex;flex-direction:column;gap:1px;min-width:0}.mcpp b{font-size:14px;font-weight:700}.mcpp small{font-size:12.5px;color:var(--muted)}'
+      + '.mcpp li:not(.ok):not(.now) b{color:var(--muted);font-weight:600}'
+      + '.mcpbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden}.mcpbar>i{display:block;height:100%;background:#2e9d5b;transition:width .4s}'
+      + '.mcpparts{display:flex;flex-wrap:wrap;gap:6px}.mcpparts span{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}.mcpparts span.ok{color:var(--fg);border-color:#2e9d5b}'
+      + '.mcpwarn{margin:0;font-size:13px;line-height:1.45;padding:8px 10px;border-radius:10px;border:1px solid rgba(214,138,28,.5);background:rgba(214,138,28,.10)}';
+    document.head.appendChild(st);
+  }
+  /* how a task sent to Claude is going: sent → Claude opened it → parts saved (how many, about how long is left) → ready.
+     titles: [[partId, title], …] of the parts that were sent */
+  function mcpProgressHtml(id, titles, sentAt) {
+    mcpCss(); if (titles) MTITLES[id] = titles; titles = MTITLES[id] || [];
+    const st = MST[id] || {}, saved = st.saved || [], total = titles.length || st.total || 1, read = st.read || 0, sent = st.sent || sentAt || Date.now();
+    const n = saved.length, done = n >= total;
+    let eta = "";
+    if (n && !done) { const ts = Object.values(st.times || {}); const last = ts.length ? Math.max.apply(null, ts) : Date.now(); const left = Math.max(1, Math.round((last - (read || sent)) / n * (total - n) / 60000)); eta = left === 1 ? "queda 1 minuto, más o menos" : "quedan unos " + left + " minutos"; }
+    else if (!n) eta = total > 1 ? "suele tardar 1-2 minutos por parte" : "suele tardar 1-2 minutos";
+    const li = (cls, b, sm) => '<li class="' + cls + '"><i aria-hidden="true"></i><span><b>' + b + '</b>' + (sm ? '<small>' + sm + '</small>' : '') + '</span></li>';
+    let h = '<ol class="mcpp">'
+      + li("ok", "Enviado a Claude", agoTxt(sent))
+      + li(read || n ? "ok" : "now", read || n ? "Claude lo ha abierto" : "Escribe en Claude: «" + escH(MCP_SAY) + "»", read ? agoTxt(read) : n ? "" : "Esperando a que Claude lo abra…")
+      + li(done ? "ok" : read || n ? "now" : "", "Claude prepara y guarda " + (total > 1 ? "cada parte" : "la hoja"), (total > 1 ? n + " de " + total + " partes" : n ? "guardada" : "aún no") + (eta ? " · " + eta : ""))
+      + li(done ? "ok" : "", "Listo en Clarea", done ? "¡Ya lo tienes!" : "Aparecerá aquí solo, sin hacer nada")
+      + '</ol>';
+    if (total > 1) h += '<div class="mcpbar" role="progressbar" aria-valuemin="0" aria-valuemax="' + total + '" aria-valuenow="' + n + '" aria-label="Partes guardadas"><i style="width:' + Math.round(n / total * 100) + '%"></i></div>'
+      + '<div class="mcpparts">' + titles.map(x => '<span class="' + (saved.includes(x[0]) ? 'ok' : '') + '">' + (saved.includes(x[0]) ? '✓ ' : '') + escH(x[1]) + '</span>').join("") + '</div>';
+    if (!read && !n && Date.now() - sent > 3 * 60000) h += '<p class="mcpwarn">¿No pasa nada? En Claude, toca <b>«+» → Conectores</b> y comprueba que <b>Clarea</b> está activado; luego escribe la frase. La primera vez, dale a <b>«Permitir siempre»</b>.</p>';
+    return '<div class="mcpprog" data-mcpprog="' + escH(id) + '" aria-live="polite">' + h + '</div>';
+  }
+  function mcpPaint(id) { document.querySelectorAll('[data-mcpprog="' + id + '"]').forEach(el => { el.outerHTML = mcpProgressHtml(id); }); }
   // what Claude saved: each new part goes through applyPart(partId, data); says how far it is
   async function mcpCollect(id, applyPart) {
     const A = mcpApplied[id] || (mcpApplied[id] = new Set()), r = await mcpPost("/mcp-res", {id, have: [...A]});
     if (r.gone) return {gone: true};
+    MST[id] = {saved: r.saved || [], total: r.total || 0, read: r.read || 0, times: r.times || {}, sent: r.sent || 0}; mcpPaint(id);
     let n = 0, bad = [];
     Object.keys(r.parts || {}).forEach(p => { try { applyPart(p, r.parts[p]); n++; } catch (e) { bad.push(p); } A.add(p); });
     return {n, bad, saved: (r.saved || []).length, total: r.total || 0, done: (r.saved || []).length >= (r.total || 1)};
@@ -989,6 +1032,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
