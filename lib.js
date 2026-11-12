@@ -352,7 +352,11 @@ window.CLAI = (function () {
   }
   async function mcpConnect() { const c = cfg(); c.mcp = {k: randKey(), t: Date.now()}; cfgSet(c); await mcpPost("/mcp-hello", {}); return mcpUrl(); }
   async function mcpDisconnect() { try { await mcpPost("/mcp-forget", {}); } catch (e) {} const c = cfg(); delete c.mcp; cfgSet(c); }
-  const mcpPush = task => mcpPost("/mcp-push", {task});
+  // with the task goes this device's notice address (if notices are on): the server tells the phone when Claude finishes
+  async function mcpPush(task) {
+    let pk = null; try { pk = window.clareaPushK ? await window.clareaPushK() : null; } catch (e) {}
+    return mcpPost("/mcp-push", {task: Object.assign({url: (location.pathname.slice(new URL(document.baseURI).pathname.length) || "./") + location.search}, task), pk});
+  }
   const mcpDrop = id => mcpPost("/mcp-drop", {id}).catch(() => {});
   const mcpApplied = {}, MST = {}, MTITLES = {};
   const escH = t => String(t == null ? "" : t).replace(/[&<>"]/g, ch => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[ch]));
@@ -1144,33 +1148,13 @@ window.CLAI = (function () {
       'Toca <b>«Crear clave de API»</b> (en inglés, <i>Create API key</i>). Si te pregunta por un proyecto, elige el que te propone o toca «Crear proyecto».',
       'Cuando aparezca la clave, toca el <b>botón de copiar</b> que hay a su lado. No la selecciones a mano: es muy fácil dejarse un trozo.',
       'Vuelve a Clarea, pégala en <b>«Clave de Gemini»</b> y toca <b>«Comprobar la clave»</b>.'],
-      tips: ['Si Clarea dice que Google no reconoce la clave, normalmente es que se borró o no se copió entera: vuelve al paso 3 y crea otra.', 'Clarea usa el modelo «Flash-Lite», que tiene mucho más uso gratis (unas 500 peticiones al día) que «Flash» (unas 20). Si se acaba, espera a mañana o toca «Seguir con otro modelo».']},
-    claude: {free: "De pago: unos céntimos por proyecto.", steps: [
-      'Abre <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> y crea una cuenta o inicia sesión.',
-      'En <b>Billing</b>, añade saldo (con unos pocos dólares tienes para muchos proyectos).',
-      'Ve a <b>Settings → API keys</b> y toca <b>«Create Key»</b>. Ponle de nombre «Clarea».',
-      'Copia la clave (empieza por <code>sk-ant-</code>) con el <b>botón de copiar</b>. Solo se enseña una vez: si la pierdes, crea otra.',
-      'Vuelve a Clarea, pégala en <b>«Clave de Claude»</b> y toca <b>«Comprobar la clave»</b>.'],
-      tips: ['Si sale que no tienes saldo, añade saldo en Billing y vuelve a intentarlo.']},
-    openrouter: {free: "Gratis, sin tarjeta (unas 50 peticiones al día).", steps: [
-      'Abre <a href="https://openrouter.ai" target="_blank" rel="noopener">openrouter.ai</a> y crea una cuenta o entra con Google o GitHub.',
-      'Ve a <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">Settings → Keys</a> y toca <b>«Create API Key»</b>. Ponle de nombre «Clarea» y déjalo sin límite de gasto (no vas a gastar: Clarea solo usa modelos gratis).',
-      'Copia la clave (empieza por <code>sk-or-</code>) con el <b>botón de copiar</b>. Solo se enseña una vez: si la pierdes, crea otra.',
-      'Vuelve a Clarea, pégala en <b>«Clave de OpenRouter»</b> y toca <b>«Comprobar la clave»</b>. Clarea elegirá el mejor modelo gratis (los que acaban en «:free»).'],
-      tips: ['Sin pagar nada tienes unas 50 peticiones al día. Si compras 10 $ de saldo una sola vez, sube a unas 1000 al día con los mismos modelos gratis.', 'Los modelos gratis cambian a menudo. Si uno deja de funcionar, toca «Seguir con otro modelo».']},
-    openai: {free: "De pago: unos céntimos por proyecto.", steps: [
-      'Abre <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a> e inicia sesión (no es lo mismo que la suscripción de ChatGPT Plus).',
-      'En <b>Settings → Billing</b>, añade saldo.',
-      'Vuelve a <b>API keys</b> y toca <b>«Create new secret key»</b>. Ponle de nombre «Clarea».',
-      'Copia la clave (empieza por <code>sk-</code>) con el <b>botón de copiar</b>. Solo se enseña una vez: si la pierdes, crea otra.',
-      'Vuelve a Clarea, pégala en <b>«Clave de ChatGPT»</b> y toca <b>«Comprobar la clave»</b>.'],
-      tips: ['Si sale que has llegado al límite o no tienes saldo, revisa Billing en OpenAI.']}
+      tips: ['Si Clarea dice que Google no reconoce la clave, normalmente es que se borró o no se copió entera: vuelve al paso 3 y crea otra.', 'Clarea usa el modelo «Flash-Lite», que tiene mucho más uso gratis (unas 500 peticiones al día) que «Flash» (unas 20). Si se acaba, espera a mañana o toca «Seguir con otro modelo».']}
   };
   function keyGuide(prov, hasKey){
     const g = KEYGUIDE[prov]; if (!g) return "";
     return '<details class="kguide"' + (hasKey ? '' : ' open') + '><summary>Cómo conseguir tu clave de ' + PROV[prov].t + ', paso a paso<small>' + g.free + '</small></summary>'
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
-      + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
+      + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
