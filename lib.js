@@ -521,6 +521,16 @@ window.CLAI = (function () {
   const qGet = () => { let q; try { q = JSON.parse(localStorage.getItem(QK())); } catch (e) { return null; } if (gone(q)) { try { localStorage.removeItem(QK()); } catch (e) {} return null; } return q; };
   const qSet = q => { try { if (q) localStorage.setItem(QK(), JSON.stringify(q)); else localStorage.removeItem(QK()); } catch (e) {} };
   let runningHere = false, beatT = 0;
+  /* the screen stays on while this page generates (if the phone locks itself, the generation pauses) */
+  let wake = null;
+  const wakeSupported = () => "wakeLock" in navigator;
+  const wakeWanted = () => { try { return localStorage.getItem("clarea-wake") !== "0"; } catch (e) { return true; } };
+  async function wakeOn() {
+    if (!wakeSupported() || !wakeWanted() || wake || document.visibilityState !== "visible") return;
+    try { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); } catch (e) { wake = null; }
+  }
+  function wakeOff() { if (wake) { try { wake.release(); } catch (e) {} wake = null; } }
+  function wakeSet(on) { try { localStorage.setItem("clarea-wake", on ? "1" : "0"); } catch (e) {} if (on && runningHere) wakeOn(); else if (!on) wakeOff(); }
   const fresh = q => q && q.beat && Date.now() - q.beat < 20000;
   const emit = () => { try { window.dispatchEvent(new CustomEvent("clarea-ai", {detail: qGet()})); } catch (e) {} paintPill(); };
   // is a generation going on (here or in another open page of Clarea)?
@@ -547,7 +557,7 @@ window.CLAI = (function () {
     if (!q || q.finished || q.stop || !ready()) return;
     await toLite();
     if (fresh(q)) return;                     // another open page of Clarea is already doing it
-    runningHere = true; q.paused = null; q.beat = Date.now(); qSet(q); emit();
+    runningHere = true; wakeOn(); q.paused = null; q.beat = Date.now(); qSet(q); emit();
     clearInterval(beatT); beatT = setInterval(() => { const x = qGet(); if (x && !x.finished) { x.beat = Date.now(); qSet(x); } }, 5000);
     try {
       while (true) {
@@ -574,7 +584,7 @@ window.CLAI = (function () {
         emit();
       }
     } finally {
-      clearInterval(beatT); runningHere = false;
+      clearInterval(beatT); runningHere = false; wakeOff();
       q = qGet();
       if (q && !q.paused && (q.stop || q.fatal || !q.ids.some(i => !q.err[i]))) { q.finished = Date.now(); q.beat = 0; qSet(q); finishedNotice(q); }
       else if (q) { q.beat = 0; qSet(q); }
@@ -638,7 +648,7 @@ window.CLAI = (function () {
   }
   document.addEventListener("click", e => { if (e.target.closest("[data-aiseen]")) { const q = qGet(); if (q && q.finished) { q.seen = true; qSet(q); paintPill(); } } });
   // carry on when the app comes back, when internet returns, and after the user logs in
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && window.PJ6USER) resume(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && window.PJ6USER) { resume(); if (runningHere) wakeOn(); } });
   window.addEventListener("online", () => { if (window.PJ6USER) resume(); });
   window.addEventListener("storage", e => { if (e.key === QK()) paintPill(); });
   // (the home page may load this after the page is ready)
@@ -646,6 +656,6 @@ window.CLAI = (function () {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 
   return {PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, isDone, switchModel, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, isDone, switchModel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
