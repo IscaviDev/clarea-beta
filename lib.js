@@ -770,6 +770,47 @@ window.CLAI = (function () {
     const nq = qGet(); if (nq) { nq.tried = tried; qSet(nq); }
     return next;
   }
+  /* ---------- «Pregúntale a tu IA»: a chat about a project or an exam question (kept with the account) ---------- */
+  function projectContext(pid) {
+    const c = ctx(pid); if (!c) return "";
+    return intro(c) + "Te va a hacer preguntas sobre su código. " + summaries(c) + "Código:\n\n" + codeBundle(c, 60000);
+  }
+  const chatFmt = t => esc(t).replace(/```[a-z]*\n?([\s\S]*?)```/g, (m, x) => "<pre>" + x + "</pre>").replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/«(.+?)»/g, "<code>$1</code>").replace(/\n/g, "<br>");
+  function openChat(o) {
+    if (document.querySelector(".chatw")) return;
+    const K = "clarea-chat-" + o.key, load_ = () => (lget(K) || {msgs: []}).msgs || [];
+    let msgs = load_(), busyNow = false;
+    const w = document.createElement("div"); w.className = "chatw"; w.setAttribute("role", "dialog"); w.setAttribute("aria-modal", "true"); w.setAttribute("aria-label", "Pregúntale a tu IA");
+    w.innerHTML = '<div class="chatp"><div class="chath"><div><b>Pregúntale a tu IA</b><small>' + esc(o.title) + '</small></div><button type="button" class="topx chatx" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>'
+      + '<div class="chatm" aria-live="polite"></div><form class="chatf"><textarea rows="2" placeholder="' + esc(o.placeholder || "Pregunta lo que no entiendas…") + '" aria-label="Tu pregunta"></textarea><button class="btn" type="submit">Enviar</button></form></div>';
+    const box = w.querySelector(".chatm"), form = w.querySelector("form"), ta = form.querySelector("textarea");
+    const paint = () => {
+      box.innerHTML = (msgs.length ? "" : '<p class="chathint">' + esc(o.hint || "Pregunta lo que quieras: tu IA responde con este contenido delante.") + (ready() ? "" : " <b>Primero conecta tu IA en Mi cuenta → Configuración.</b>") + '</p>')
+        + msgs.map(m => '<div class="chatb ' + (m.r === "u" ? "me" : "ai") + '">' + (m.r === "u" ? esc(m.t).replace(/\n/g, "<br>") : chatFmt(m.t)) + '</div>').join("")
+        + (busyNow ? '<div class="chatb ai wait"><i></i><i></i><i></i></div>' : "")
+        + (msgs.length ? '<button type="button" class="chatclear">Borrar la conversación</button>' : "");
+      box.scrollTop = box.scrollHeight;
+    };
+    const save = () => lset(K, {t: Date.now(), msgs: msgs.slice(-40)});
+    const close = () => { w.classList.add("closing"); setTimeout(() => w.remove(), 160); };
+    w.addEventListener("click", ev => {
+      if (ev.target === w || ev.target.closest(".chatx")) close();
+      else if (ev.target.closest(".chatclear")) { msgs = []; save(); paint(); }
+    });
+    ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.shiftKey && !/Android|iPhone|iPad/.test(navigator.userAgent)) { ev.preventDefault(); form.requestSubmit(); } });
+    form.addEventListener("submit", async ev => {
+      ev.preventDefault(); const q = ta.value.trim(); if (!q || busyNow) return;
+      if (!ready()) { paint(); return; }
+      msgs.push({r: "u", t: q}); ta.value = ""; busyNow = true; save(); paint();
+      const hist = msgs.slice(-10).map(m => (m.r === "u" ? "Estudiante: " : "Tú: ") + m.t).join("\n\n");
+      const text = o.context + "\n\n---\nResponde en español, claro y breve (como un profesor que ayuda a preparar el examen), con ejemplos del contenido de arriba cuando sirva. Pon el código entre ``` y los nombres de código entre « ».\n\nConversación:\n" + hist + "\n\nTú:";
+      try { msgs.push({r: "a", t: String(await callAI(text, false)).trim()}); }
+      catch (x) { msgs.push({r: "a", t: "No he podido responder: " + (errEs ? errEs(x.message || x) : (x.message || x))}); }
+      busyNow = false; msgs = msgs.slice(-40); save(); paint();
+    });
+    document.body.appendChild(w); paint(); ta.focus();
+  }
+
   /* ---------- notices ---------- */
   function askNotify() {
     try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
@@ -842,6 +883,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
