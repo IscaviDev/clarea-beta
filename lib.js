@@ -317,6 +317,46 @@ window.CLAI = (function () {
     const G = c.GIT;
     return intro(c) + 'Explícale el historial de Git del proyecto.\n\n' + JSONONLY + ' Forma exacta:\n{"summary":"cómo está organizado el trabajo en el repositorio, 2-3 frases","branches":{"NOMBRE DE LA RAMA":{"why":"para qué se creó, 1-2 frases","changed":"qué se cambió en ella, 1-2 frases"}},"prs":{"NÚMERO":{"what":"qué aporta este pull request, 1-2 frases"}}}\n\nEn español. Incluye todas las ramas y todos los pull requests.\n\nRama principal: ' + G.def + '\nRamas: ' + G.branches.join(", ") + '\n\nCommits (fecha · rama · mensaje):\n' + G.commits.map(x => x.d.slice(0, 10) + " · " + x.b + " · " + x.m).join("\n") + '\n\nPull requests:\n' + G.prs.map(p => "#" + p.n + " " + p.t + " (" + p.from + " → " + p.to + ", " + stLabel(p.st) + ")" + (p.body ? "\n  " + p.body.slice(0, 300).replace(/\n/g, " ") : "") + "\n  archivos: " + p.f.map(f => f[0]).join(", ")).join("\n");
   }
+  /* every complete JSON object in a chat answer (it may have several, or be cut at the end).
+     If the last one is cut, the complete objects inside it are kept too (as {__partial: [...]}) */
+  function jsonBlocks(text) {
+    const out = [], t = String(text || ""); let depth = 0, start = -1, inS = false, esc = false;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i];
+      if (inS) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inS = false; continue; }
+      if (ch === '"') { if (depth > 0) inS = true; continue; }
+      if (ch === "{") { if (depth === 0) start = i; depth++; }
+      else if (ch === "}" && depth > 0) { depth--; if (depth === 0) { try { out.push(JSON.parse(t.slice(start, i + 1))); } catch (e) {} start = -1; } }
+    }
+    if (depth > 0 && start >= 0) { const inner = jsonBlocks(t.slice(start + 1)); if (inner.length) out.push({__partial: inner}); }
+    return out;
+  }
+  /* the whole project in ONE message, for a chat (Claude Pro, ChatGPT Plus…): the code once, then every part */
+  function promptAll(c, jobs) {
+    const tasks = jobs.map(j => {
+      let t = prompt(c, j).slice(intro(c).length);
+      if (j.kind !== "git") { const k = t.search(/\n\nCódigo/); if (k > 0) t = t.slice(0, k); }
+      t = t.split(JSONONLY).join("Su objeto JSON.");
+      if (j.kind === "code") t += "\nArchivos de esta parte (están en el código del final): " + j.parts.map(x => x.p + " (líneas " + x.from + "-" + x.to + ")").join(", ") + ".";
+      return "### TAREA " + j.id + " · " + jobTitle(c, j) + "\n" + t;
+    });
+    return intro(c) + "Vas a prepararle el repaso completo de su proyecto, en " + jobs.length + " partes.\n\n"
+      + "CÓMO RESPONDER (muy importante: una app lee tu respuesta automáticamente):\n"
+      + "- Para cada tarea escribe una línea «### PARTE: ID» (el ID tal cual: " + jobs.map(j => j.id).join(", ") + ") y debajo SOLO su objeto JSON válido, sin ``` ni explicaciones.\n"
+      + "- Hazlas en orden. Si no te caben todas en un mensaje, acaba la parte que estés escribiendo, para y escribe «SIGUE». Cuando el estudiante te escriba «sigue», continúa con la parte siguiente, sin repetir ninguna.\n\n"
+      + tasks.join("\n\n") + "\n\n### CÓDIGO DEL PROYECTO (cada línea empieza por su número)\n" + summaries(c) + codeBundle(c, 600000);
+  }
+  // a chat answer to promptAll: saves every part it brings; says which ones came and which could not be read
+  function applyAll(c, jobs, text) {
+    const saved = [], bad = [];
+    String(text || "").split(/^[ \t]*#{1,4}[ \t]*PARTE:?[ \t]*/mi).slice(1).forEach(seg => {
+      const id = (seg.match(/^[\w-]+/) || [""])[0], j = jobs.find(x => x.id === id); if (!j) return;
+      const data = jsonBlocks(seg.slice(id.length)).find(o => !o.__partial);
+      if (!data) { bad.push(id); return; }
+      try { applyResult(c, j, data); saved.push(id); } catch (e) { bad.push(id); }
+    });
+    return {saved, bad};
+  }
   function parseJSON(text) {
     let t = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
     const a = t.indexOf("{"), b = t.lastIndexOf("}");
@@ -887,6 +927,6 @@ window.CLAI = (function () {
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
   return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+          listModels, pickModel, callAI, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
