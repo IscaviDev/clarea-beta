@@ -460,12 +460,15 @@ window.CLAI = (function () {
     e.retry = r.status === 429 || r.status === 500 || r.status === 502 || r.status === 503 || r.status === 504 || r.status === 529;
     return e;
   }
-  async function callOnce(text, wantJSON) {
+  /* files (photos and PDFs) go with the text: [{mime, b64, name}]. All 4 AIs read images and PDFs, each in its own format */
+  async function callOnce(text, wantJSON, files) {
     const c = cfg(), prov = c.prov, key = c.keys[prov], model = c.models[prov];
+    files = files || [];
     let r;
     try {
       if (prov === "claude") {
-        const body = {model, max_tokens: 32000, stream: true, messages: [{role: "user", content: text}]};
+        const content = files.length ? files.map(f => f.mime === "application/pdf" ? {type: "document", source: {type: "base64", media_type: f.mime, data: f.b64}} : {type: "image", source: {type: "base64", media_type: f.mime, data: f.b64}}).concat([{type: "text", text}]) : text;
+        const body = {model, max_tokens: 32000, stream: true, messages: [{role: "user", content}]};
         const h = {"content-type": "application/json", "x-api-key": key, "anthropic-version": "2026-10-21", "anthropic-dangerous-direct-browser-access": "true"};
         // if a safety check declines, the API retries on a fallback model by itself
         if (/^claude-(opus-5|sonnet-5-5|fable)/.test(model)) { body.fallbacks = "default"; h["anthropic-beta"] = "server-side-fallback-2026-07-01"; }
@@ -491,7 +494,8 @@ window.CLAI = (function () {
       }
       if (prov === "openai" || prov === "openrouter") {
         const or = prov === "openrouter";
-        const body = {model, messages: [{role: "user", content: text}]}; if (wantJSON && !or) body.response_format = {type: "json_object"};
+        const content = files.length ? [{type: "text", text}].concat(files.map(f => f.mime === "application/pdf" ? {type: "file", file: {filename: f.name || "documento.pdf", file_data: "data:application/pdf;base64," + f.b64}} : {type: "image_url", image_url: {url: "data:" + f.mime + ";base64," + f.b64}})) : text;
+        const body = {model, messages: [{role: "user", content}]}; if (wantJSON && !or) body.response_format = {type: "json_object"};
         const h = {"Content-Type": "application/json", Authorization: "Bearer " + key};
         if (or) { h["HTTP-Referer"] = "https://clarea.dev"; h["X-Title"] = "Clarea"; }
         r = await fetch(or ? "https://openrouter.ai/api/v1/chat/completions" : "https://api.openai.com/v1/chat/completions", {method: "POST", headers: h, body: JSON.stringify(body)});
@@ -501,7 +505,7 @@ window.CLAI = (function () {
         if (ch && ch.finish_reason === "length") throw new Error("La respuesta era demasiado larga y se ha cortado.");
         return (ch && ch.message && ch.message.content) || "";
       }
-      const body = {contents: [{role: "user", parts: [{text}]}]}; if (wantJSON) body.generationConfig = {responseMimeType: "application/json"};
+      const body = {contents: [{role: "user", parts: files.map(f => ({inline_data: {mime_type: f.mime, data: f.b64}})).concat([{text}])}]}; if (wantJSON) body.generationConfig = {responseMimeType: "application/json"};
       r = await fetch(GEMINI + "/v1beta/models/" + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(key), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       if (!r.ok) throw await apiErr(r, prov);
       const j = await r.json(), cand = j.candidates && j.candidates[0];
@@ -515,10 +519,10 @@ window.CLAI = (function () {
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   // busy servers (like Gemini's "high demand" 503) are tried again a few times, waiting longer each time
-  async function callAI(text, wantJSON, onWait) {
+  async function callAI(text, wantJSON, onWait, files) {
     const waits = [10, 30, 60];
     for (let a = 0; ; a++) {
-      try { return await callOnce(text, wantJSON); }
+      try { return await callOnce(text, wantJSON, files); }
       catch (e) { if (!e.retry || a >= waits.length) throw e; const w = e.wait || waits[a]; if (onWait) onWait(w, e); await sleep(w * 1000); if (onWait) onWait(0, null); }
     }
   }
