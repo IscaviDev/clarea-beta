@@ -527,23 +527,47 @@ window.CLAI = (function () {
   const QK = () => "clarea-aiq/" + (window.PJ6USER || "_");
   // the project of the queue was deleted (here or on another device): the queue goes with it
   const gone = q => { const l = lget("clarea-projs"); return !!(q && l && Array.isArray(l.list) && !l.list.some(x => x.id === q.pid)); };
-  const qGet = () => { let q; try { q = JSON.parse(localStorage.getItem(QK())); } catch (e) { return null; } if (gone(q)) { try { localStorage.removeItem(QK()); } catch (e) {} return null; } return q; };
-  const qSet = q => { try { if (q) localStorage.setItem(QK(), JSON.stringify(q)); else localStorage.removeItem(QK()); } catch (e) {} };
+  /* the queue lives on the device that runs it; a copy goes with the account ("clarea-aiqs"), so every device sees it.
+     In the cloud any device can collect it; run here, the others only show it. */
+  const DEV = (() => { try { let d = localStorage.getItem("clarea-device"); if (!d) { d = Math.random().toString(36).slice(2, 10); localStorage.setItem("clarea-device", d); } return d; } catch (e) { return "x"; } })();
+  const MK = () => U() + "clarea-aiqs";
+  let lastMirror = null;
+  function mirror(q) {
+    try {
+      const m = q ? Object.assign({}, q, {dev: q.dev || DEV, beat: undefined, wait: undefined, waitUntil: undefined, waitWhy: undefined, lastErr: undefined, remote: undefined}) : null;
+      const sig = JSON.stringify(m); if (sig === lastMirror) return; lastMirror = sig;
+      localStorage.setItem(MK(), JSON.stringify({t: Date.now(), q: m}));
+    } catch (e) {}
+  }
+  const mirrorGet = () => { try { const x = JSON.parse(localStorage.getItem(MK())); return x && x.q; } catch (e) { return null; } };
+  const qGet = () => {
+    let q; try { q = JSON.parse(localStorage.getItem(QK())); } catch (e) { return null; }
+    if (!q) {
+      const m = mirrorGet();
+      if (m && m.dev !== DEV && !gone(m)) {
+        if (m.cloud && !m.finished) { q = Object.assign({}, m); try { localStorage.setItem(QK(), JSON.stringify(q)); } catch (e) {} }   // the cloud: collect it here too
+        else return Object.assign({}, m, {remote: true});
+      }
+    }
+    if (q && gone(q)) { try { localStorage.removeItem(QK()); } catch (e) {} mirror(null); return null; }
+    return q;
+  };
+  const qSet = q => { try { if (q && q.remote) { mirror(q); return; } if (q) localStorage.setItem(QK(), JSON.stringify(q)); else localStorage.removeItem(QK()); } catch (e) {} mirror(q); };
   let runningHere = false, beatT = 0;
   /* the screen stays on while this page generates (if the phone locks itself, the generation pauses) */
   let wake = null;
   const wakeSupported = () => "wakeLock" in navigator;
-  const wakeWanted = () => { try { return localStorage.getItem("clarea-wake") !== "0"; } catch (e) { return true; } };
+  const wakeWanted = () => { try { const x = JSON.parse(localStorage.getItem(U() + "clarea-wake")); return x ? x.v !== false : localStorage.getItem("clarea-wake") !== "0"; } catch (e) { return true; } };
   async function wakeOn() {
     if (!wakeSupported() || !wakeWanted() || wake || document.visibilityState !== "visible") return;
     try { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); } catch (e) { wake = null; }
   }
   function wakeOff() { if (wake) { try { wake.release(); } catch (e) {} wake = null; } }
-  function wakeSet(on) { try { localStorage.setItem("clarea-wake", on ? "1" : "0"); } catch (e) {} if (on && runningHere) wakeOn(); else if (!on) wakeOff(); }
+  function wakeSet(on) { try { localStorage.setItem(U() + "clarea-wake", JSON.stringify({t: Date.now(), v: !!on})); localStorage.removeItem("clarea-wake"); } catch (e) {} if (on && runningHere) wakeOn(); else if (!on) wakeOff(); }
   const fresh = q => q && q.beat && Date.now() - q.beat < 20000;
   const emit = () => { try { window.dispatchEvent(new CustomEvent("clarea-ai", {detail: qGet()})); } catch (e) {} paintPill(); };
   // is a generation going on (here or in another open page of Clarea)?
-  const busy = () => { const q = qGet(); return !!(q && !q.finished && (q.cloud || runningHere || fresh(q))); };
+  const busy = () => { const q = qGet(); return !!(q && !q.finished && (q.cloud || q.remote || runningHere || fresh(q))); };
   function start(pid, ids) {
     const c = ctx(pid); if (!c) return;
     const all = buildJobs(c), todo = ids && ids.length ? ids : all.filter(j => !isDone(c, j)).map(j => j.id);
@@ -553,7 +577,8 @@ window.CLAI = (function () {
     if (cfg().cloud && PUSHURL()) cloudStart(); else run();
   }
   function stop() {
-    const q = qGet(); if (q) { q.stop = true; if (q.cloud) { cloudCancel(q.cloud); q.finished = Date.now(); } qSet(q); }
+    const q = qGet(); if (q && q.remote) { q.stopReq = true; qSet(q); emit(); return; }
+    if (q) { q.stop = true; if (q.cloud) { cloudCancel(q.cloud); q.finished = Date.now(); } qSet(q); }
     emit();
   }
 
@@ -615,7 +640,7 @@ window.CLAI = (function () {
     } catch (e) { /* no internet: try again later */ }
     finally { polling = false; q = qGet(); if (q && q.cloud && !q.finished) pollT = setTimeout(cloudPoll, 20000); }
   }
-  function dismiss() { qSet(null); emit(); }
+  function dismiss() { try { localStorage.removeItem(QK()); } catch (e) {} mirror(null); emit(); }
   async function toLite() {
     const c = cfg(); if (c.liteMoved || c.prov !== "gemini" || !c.models || !/^gemini-[\d.]+-flash$/.test(c.models.gemini || "")) return;
     c.liteMoved = true;
@@ -626,6 +651,7 @@ window.CLAI = (function () {
     if (runningHere) return;
     let q = qGet();
     if (!q || q.finished || q.stop || !ready()) return;
+    if (q.remote) return;
     if (q.cloud) { cloudPoll(); return; }
     await toLite();
     if (fresh(q)) return;                     // another open page of Clarea is already doing it
@@ -634,6 +660,7 @@ window.CLAI = (function () {
     try {
       while (true) {
         q = qGet(); if (!q || q.stop) break;
+        { const m = mirrorGet(); if (m && m.stopReq) { q.stop = true; qSet(q); break; } }     // stopped from another device
         const id = q.ids.find(i => !q.err[i]); if (!id) break;
         const c = ctx(q.pid); if (!c) { q.err[id] = "El proyecto ya no existe."; qSet(q); continue; }
         const job = buildJobs(c).find(j => j.id === id);
@@ -681,6 +708,7 @@ window.CLAI = (function () {
   function resume() {
     const q = qGet();
     if (!q || q.finished || q.stop) { paintPill(); return; }
+    if (q.remote) { paintPill(); return; }
     if (q.cloud) { cloudPoll(); return; }
     // the page that was generating was just closed: its "still alive" mark fades in a few seconds, then this page takes over
     if (fresh(q) && !runningHere) { paintPill(); clearTimeout(resumeT); resumeT = setTimeout(resume, Math.max(1000, 21000 - (Date.now() - q.beat))); return; }
