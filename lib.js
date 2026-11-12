@@ -1019,7 +1019,7 @@ window.CLAI = (function () {
         }, msg);
         return;
       }
-      if (!ready()) { paint(); return; }
+      if (!ready()) { welcome(); return; }
       msgs.push({r: "u", t: q}); ta.value = ""; busyNow = true; save(); paint();
       const hist = msgs.slice(-10).map(m => (m.r === "u" ? "Estudiante: " : "Tú: ") + m.t).join("\n\n");
       const text = o.context + "\n\n---\nResponde en español, claro y breve (como un profesor que ayuda a preparar el examen), con ejemplos del contenido de arriba cuando sirva. Pon el código entre ``` y los nombres de código entre « ».\n\nConversación:\n" + hist + "\n\nTú:";
@@ -1033,6 +1033,73 @@ window.CLAI = (function () {
         + '.chatb.claude{border:1.5px dashed var(--accent)}.chatb.claude button{font:inherit;font-size:13px;font-weight:700;color:var(--accent-ink,var(--accent));background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;margin-right:8px}';
       document.head.appendChild(st); }
   }
+
+  /* ---------- the two ways to use the AI: Gemini (free key, by itself) or the student's Claude account (connector) ---------- */
+  function pickCss() {
+    if (document.getElementById("aipickcss")) return;
+    const st = document.createElement("style"); st.id = "aipickcss";
+    st.textContent = '.aipick{display:grid;grid-template-columns:1fr;gap:10px}@media (min-width:620px){.aipick{grid-template-columns:1fr 1fr}}'
+      + '.aipc{display:flex;flex-direction:column;gap:6px;background:var(--surface);border:1.5px solid var(--line);border-radius:14px;padding:14px}'
+      + '.aipc b{font-size:15.5px}.aipc span{font-size:13.5px;line-height:1.45;color:var(--muted)}.aipc .qa{margin-top:4px}'
+      + '.aipc em{align-self:flex-start;font-style:normal;font-size:11.5px;font-weight:800;letter-spacing:.02em;padding:2px 8px;border-radius:999px;background:var(--accent-soft,rgba(31,95,191,.12));color:var(--fg)}'
+      + '.aimore{background:var(--surface);border:1px solid var(--line);border-radius:14px}'
+      + '.aimore>summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;align-items:center;gap:10px}'
+      + '.aimore>summary::-webkit-details-marker{display:none}'
+      + '.aimore>summary>span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.aimore>summary b{font-size:14.5px}.aimore>summary small{font-size:12.5px;color:var(--muted)}'
+      + '.aimore>summary::after{content:"";flex:none;width:8px;height:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);margin:-4px 4px 0 0}'
+      + '.aimore[open]>summary::after{transform:rotate(-135deg);margin-top:4px}'
+      + '.aimoreb{padding:0 12px 12px;display:flex;flex-direction:column;gap:12px}'
+      + '.aiwel{position:fixed;inset:0;z-index:1000;background:rgba(10,14,24,.55);display:flex;align-items:flex-end;justify-content:center}'
+      + '.aiwel>div{position:relative;background:var(--bg);color:var(--fg);width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:20px 20px 0 0;padding:22px 16px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px}'
+      + '@media (min-width:620px){.aiwel{align-items:center}.aiwel>div{border-radius:20px}}'
+      + '.aiwel h3{margin:0;padding-right:44px;font-size:19px}.aiwel p{margin:0;font-size:14px;line-height:1.45;color:var(--muted)}'
+      + '.aiwel .topx{position:absolute;top:12px;right:12px}';
+    document.head.appendChild(st);
+  }
+  // the two cards: shown in the ✦ IA tab while nothing is set up, and in the welcome
+  function chooseHtml() {
+    pickCss();
+    return '<div class="aipick">'
+      + '<div class="aipc"><em>Gratis</em><b>Gemini</b><span>Con una clave gratis de Google. Clarea lo prepara todo sola, en la nube: puedes cerrarla y te avisa.</span><div class="qa"><button type="button" class="btn" data-aipick="gemini">Usar Gemini</button></div></div>'
+      + '<div class="aipc"><em>Tu cuenta</em><b>Claude</b><span>Con tu cuenta de Claude (gratis, Pro o Max), sin clave. Clarea abre Claude con el mensaje escrito y tú solo pulsas enviar.</span><div class="qa"><button type="button" class="btn" data-aipick="claude">Usar Claude</button></div></div>'
+      + '</div>';
+  }
+  // «Otras formas»: copying and pasting into any chat, folded away
+  function moreHtml(inner, open) {
+    pickCss();
+    return '<details class="aimore"' + (open ? ' open' : '') + '><summary><span><b>Otras formas</b><small>Copiar y pegar en tu chat de IA (ChatGPT, Claude, Gemini…)</small></span></summary><div class="aimoreb">' + inner + '</div></details>';
+  }
+  function goConfig() {
+    const a = document.createElement("a"); a.href = "configuracion"; a.setAttribute("data-go", "#/configuracion");
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  // the first time the AI is used with nothing set up: choose Gemini or Claude
+  function welcome() {
+    if (document.querySelector(".aiwel")) return;
+    const c = cfg(); c.welcomed = true; cfgSet(c);
+    const w = document.createElement("div"); w.className = "aiwel";
+    w.innerHTML = '<div role="dialog" aria-modal="true" aria-labelledby="aiwelt"><button type="button" class="topx" data-aiwelx aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
+      + '<h3 id="aiwelt">¿Con qué IA quieres estudiar?</h3><p>Elige una. Puedes cambiarlo cuando quieras en Configuración.</p>' + chooseHtml() + '</div>';
+    const close = () => { document.removeEventListener("keydown", key); w.remove(); };
+    const key = e => { if (e.key === "Escape") close(); };
+    w.addEventListener("click", e => { if (e.target === w || e.target.closest("[data-aiwelx]")) close(); });
+    document.addEventListener("keydown", key);
+    document.body.appendChild(w);
+    setTimeout(() => { const b = w.querySelector("[data-aipick]"); if (b) b.focus(); }, 30);
+  }
+  // nothing set up yet and never asked: show the welcome (once per account)
+  function welcomeOnce() { if (!ready() && !mcpOn() && !cfg().welcomed) { welcome(); return true; } return false; }
+  async function pick(k, btn) {
+    const c = cfg(); c.pick = k; c.welcomed = true; cfgSet(c);
+    if (k === "claude" && !mcpOn()) {
+      btn.disabled = true; btn.textContent = "Conectando…";
+      try { await mcpConnect(); }
+      catch (x) { const d = cfg(); delete d.mcp; cfgSet(d); btn.disabled = false; btn.textContent = "Usar Claude"; if (window.clareaToast) window.clareaToast(x instanceof TypeError ? "No se ha podido conectar. ¿Hay internet?" : x.message); return; }
+    }
+    const wl = document.querySelector(".aiwel"); if (wl) wl.remove();
+    goConfig();
+  }
+  document.addEventListener("click", e => { const b = e.target.closest("[data-aipick]"); if (b && !b.disabled) { e.preventDefault(); pick(b.dataset.aipick, b); } });
 
   /* ---------- notices ---------- */
   function askNotify() {
@@ -1105,7 +1172,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda solo en este dispositivo. En otro móvil u ordenador tendrás que pegarla otra vez.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  return {chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, CLAUDE_MODELS, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
