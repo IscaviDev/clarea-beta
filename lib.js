@@ -87,6 +87,53 @@ window.CL = (function () {
     return out;
   }
 
+  /* ----- documents (PDF, Word, notes): turned into plain text, one paragraph or line per line ----- */
+  const DOC_EXT = /\.(pdf|docx|txt|md|markdown)$/i;
+  let pdfLib = null;
+  // pdf.js, loaded only when a PDF is opened (it needs internet the first time)
+  function loadPdf() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfLib) return pdfLib;
+    const V = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+    pdfLib = new Promise((ok, ko) => {
+      const sc = document.createElement("script"); sc.src = V + "pdf.min.js";
+      sc.onload = () => { if (!window.pdfjsLib) return ko(new Error("PDF")); window.pdfjsLib.GlobalWorkerOptions.workerSrc = V + "pdf.worker.min.js"; ok(window.pdfjsLib); };
+      sc.onerror = () => { pdfLib = null; ko({code: "PDFNET"}); };
+      document.head.appendChild(sc);
+    });
+    return pdfLib;
+  }
+  async function pdfText(file) {
+    const lib = await loadPdf(), doc = await lib.getDocument({data: new Uint8Array(await file.arrayBuffer())}).promise, out = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const tc = await (await doc.getPage(n)).getTextContent();
+      let line = "";
+      tc.items.forEach(it => { line += it.str; if (it.hasEOL) { out.push(line.replace(/\s+/g, " ").trim()); line = ""; } });
+      if (line.trim()) out.push(line.replace(/\s+/g, " ").trim());
+      out.push("");
+    }
+    return out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  }
+  // a .docx is a .zip: the text is in word/document.xml, one <w:p> per paragraph
+  async function docxText(file) {
+    const e = (await zipEntries(file)).find(x => x.path === "word/document.xml");
+    if (!e) throw {code: "NODOCX"};
+    const xml = await e.read(), dec = t => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+    return xml.split(/<\/w:p>/).map(p => dec((p.match(/<w:t[^>]*>[^<]*<\/w:t>|<w:tab\/>/g) || []).map(t => t === "<w:tab/>" ? " " : t.replace(/<[^>]+>/g, "")).join("")).trim())
+      .join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  }
+  // files → entries for collect(): each document becomes «name.md»
+  function docEntries(fileList) {
+    return Array.from(fileList).filter(f => DOC_EXT.test(f.name)).map(f => {
+      const base = f.name.replace(/\.(pdf|docx|txt|markdown)$/i, "").replace(/\.md$/i, "");
+      return {path: base + ".md", size: Math.min(f.size, 1000), read: async () => {
+        const t = /\.pdf$/i.test(f.name) ? await pdfText(f) : /\.docx$/i.test(f.name) ? await docxText(f) : await f.text();
+        // long paragraphs stay on one line (the page wraps them); no line may be huge
+        return t.split("\n").map(l => l.length > 3000 ? l.slice(0, 3000) : l).join("\n");
+      }};
+    });
+  }
+
   /* ----- GitHub (public repositories, no account: 60 requests per hour) ----- */
   function parseRepo(s) {
     s = String(s || "").trim();
@@ -295,7 +342,7 @@ window.CL = (function () {
     return JSON.parse(s);
   }
 
-  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, latestCommit, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, carryBlocks, secretsOf, maskSecrets, MAX_TOTAL};
+  return {collect, folderEntries, zipEntries, docEntries, DOC_EXT, parseRepo, repoInfo, githubEntries, latestCommit, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, carryBlocks, secretsOf, maskSecrets, MAX_TOTAL};
 })();
 
 ;
@@ -332,6 +379,7 @@ window.CLAI = (function () {
 
   /* ---------- a project, read fresh from storage ---------- */
   const DT = {facil: "Fácil", media: "Media", dificil: "Difícil"};
+  const DDOC = {facil: "Ideas principales y definiciones.", media: "Cómo se relacionan las partes y por qué.", dificil: "Detalles, ejemplos, excepciones y conclusiones."};
   const DD = {facil: "Qué hace cada archivo y conceptos básicos.", media: "Cómo funcionan las partes y cómo se comunican.", dificil: "Detalles, casos límite, seguridad y por qué está hecho así."};
   function ctx(pid) {
     const P = ((lget("clarea-projs") || {}).list || []).find(x => x.id === pid), CODE = lget("clarea-pcode-" + pid);
@@ -347,9 +395,11 @@ window.CLAI = (function () {
   // lines of code per part: with a key the AI reads big parts (far fewer requests, so the free limits last);
   // copied by hand into a chat they stay small, because chats cut long answers
   const LIM_KEY = 1500, LIM_PASTE = 450;
-  const explainable = (c, p) => !["md", "txt", "cfg"].includes(CL.langOf(p)) && CL.lineCount(c.CODE.files[p]) > 0 && !(CL.langOf(p) === "json" && CL.lineCount(c.CODE.files[p]) > 300);
+  // a project made of documents (PDF, Word, notes) instead of code: its paragraphs are long, so the parts are smaller
+  const isDoc = c => !!(c && c.P && c.P.kind === "doc");
+  const explainable = (c, p) => (isDoc(c) || !["md", "txt", "cfg"].includes(CL.langOf(p))) && CL.lineCount(c.CODE.files[p]) > 0 && !(CL.langOf(p) === "json" && CL.lineCount(c.CODE.files[p]) > 300);
   function buildJobs(c, opt) {
-    const LIM = opt && opt.paste ? LIM_PASTE : LIM_KEY;
+    const LIM = isDoc(c) ? (opt && opt.paste ? 120 : 350) : opt && opt.paste ? LIM_PASTE : LIM_KEY;
     const jobs = []; let cur = [], curN = 0, k = 0;
     const flush = () => { if (cur.length) { jobs.push({id: "code-" + (k++), kind: "code", parts: cur}); cur = []; curN = 0; } };
     c.paths.filter(p => explainable(c, p)).forEach(p => {
@@ -396,10 +446,14 @@ window.CLAI = (function () {
     return c.paths.map(p => { const ls = c.lines(p), keep = ratio >= 1 ? ls.length : Math.max(15, Math.floor(ls.length * ratio)); return "=== " + p + " (" + ls.length + " líneas" + (keep < ls.length ? ", recortado a las primeras " + keep : "") + ") ===\n" + numbered(c, p, 1, Math.min(keep, ls.length)); }).join("\n\n");
   }
   function summaries(c) { const s = c.paths.filter(p => c.AID.files[p] && c.AID.files[p].what).map(p => "- " + p + ": " + c.AID.files[p].what); return s.length ? "Resumen de cada archivo:\n" + s.join("\n") + "\n\n" : ""; }
-  const intro = c => 'Eres profesor de Desarrollo de Aplicaciones Web. Un estudiante tiene un examen sobre el código de su proyecto «' + c.P.name + '»' + (c.P.desc ? ' (' + c.P.desc + ')' : '') + ', de la asignatura ' + c.P.subj + '. ';
+  const intro = c => (isDoc(c) ? 'Eres profesor. Un estudiante tiene un examen (o tiene que defender) su trabajo «' : 'Eres profesor de programación. Un estudiante tiene un examen sobre el código de su proyecto «') + c.P.name + '»' + (c.P.desc ? ' (' + c.P.desc + ')' : '') + ', de la asignatura ' + c.P.subj + '. ';
+  const codeLabel = c => isDoc(c) ? "Documento" : "Código";
   const JSONONLY = 'Responde SOLO con un objeto JSON válido, sin texto antes ni después y sin ```.';
   const stLabel = s => s === "merged" ? "Merged" : s === "open" ? "Abierto" : "Cerrado";
   function prompt(c, j) {
+    if (j.kind === "code" && isDoc(c)) return intro(c) + 'Explícale este documento por partes para que lo entienda y sepa explicarlo en el examen.\n\n' + JSONONLY + ' Forma exacta:\n{"files":{"RUTA":{"role":"tipo de documento en 2-5 palabras","what":"de qué trata y para qué sirve, 2-3 frases","blocks":[{"from":1,"to":8,"imp":3,"easy":"resumen sencillo de esa parte, 1-2 frases","tech":"explicación más completa, con los conceptos que hay que saber, 1-3 frases"}]}}}\n\nReglas:\n- En "files" van exactamente estos archivos, con la ruta tal cual: ' + j.parts.map(x => x.p).join(", ") + '.\n- "blocks" cubre TODAS las líneas indicadas de cada archivo, en orden y sin huecos ni repeticiones: el primer bloque empieza en la primera línea indicada, cada bloque empieza en la línea siguiente al anterior y el último acaba en la última línea indicada.\n- Cada bloque agrupa las líneas de una misma idea o apartado (de 1 a 15 líneas). Las líneas en blanco van con el bloque de al lado.\n- "imp" es la importancia para el examen: 3 = clave (ideas principales, definiciones, conclusiones), 2 = importante, 1 = normal, 0 = secundario (índice, portada, bibliografía, cosas repetidas).\n- En español. No copies el texto en las explicaciones.\n\nDocumento (cada línea empieza por su número):\n\n' + j.parts.map(x => { const n = CL.lineCount(c.CODE.files[x.p]); return "=== " + x.p + " (líneas " + x.from + "-" + x.to + " de " + n + ") ===\n" + numbered(c, x.p, x.from, x.to); }).join("\n\n");
+    if (j.kind === "gloss" && isDoc(c)) return intro(c) + 'Haz un glosario de los conceptos clave de este trabajo que el estudiante debe saber explicar (términos, definiciones, procesos, autores, leyes, siglas…). Entre 12 y 24 conceptos, de más a menos importante.\n\n' + JSONONLY + ' Forma exacta:\n{"glossary":[{"term":"nombre corto del concepto","cat":"tema o apartado","easy":"qué es, en una frase corta","easyLong":"explicado fácil para alguien que empieza, con una comparación de la vida real, 2-3 frases","tech":"explicación precisa, 1-3 frases","code":"una frase copiada tal cual del documento donde sale","file":"ruta del archivo","line":12}]}\n\nEn español.\n\n' + summaries(c) + 'Documento:\n\n' + codeBundle(c, 90000);
+    if (j.kind === "exam" && isDoc(c)) return intro(c) + 'Escribe preguntas de examen de dificultad ' + DT[j.diff].toUpperCase() + ' sobre este trabajo: ' + DDOC[j.diff] + '\n\n' + JSONONLY + ' Forma exacta:\n{"questions":[{"type":"mc","q":"pregunta","options":["opción a","opción b","opción c","opción d"],"answer":0,"why":"por qué es la correcta, 1-2 frases","wrong":["por qué la a no es (vacío si es la correcta)","…b","…c","…d"],"file":"ruta","line":12},{"type":"written","q":"pregunta para responder en 2-5 frases","model":"respuesta modelo de 2-5 frases","keyTerms":["3 a 6 conceptos que una buena respuesta debe decir"],"wrong":["0 a 3 ideas falsas típicas"],"file":"ruta","line":12}]}\n\nReglas:\n- Exactamente 20 de tipo "mc" y 6 de tipo "written".\n- Tratan sobre ESTE documento: qué significa…, por qué…, qué relación hay entre…, qué concluye….\n- En las de test solo una opción es correcta y las otras son creíbles; reparte la correcta entre a, b, c y d.\n- "answer" es la posición de la correcta: 0 = a, 1 = b, 2 = c, 3 = d.\n- "file" y "line" señalan dónde se ve la respuesta en el documento.\n- En español.\n\n' + summaries(c) + 'Documento:\n\n' + codeBundle(c, 90000);
     if (j.kind === "code") return intro(c) + 'Explícale este código para que lo entienda y sepa explicarlo en el examen.\n\n' + JSONONLY + ' Forma exacta:\n{"files":{"RUTA":{"role":"tipo de archivo en 2-5 palabras","what":"qué hace el archivo y para qué sirve en el proyecto, 2-3 frases","blocks":[{"from":1,"to":8,"imp":3,"easy":"explicación sencilla, 1-2 frases","tech":"explicación técnica y precisa, 1-3 frases"}]}}}\n\nReglas:\n- En "files" van exactamente estos archivos, con la ruta tal cual: ' + j.parts.map(x => x.p).join(", ") + '.\n- "blocks" cubre TODAS las líneas indicadas de cada archivo, en orden y sin huecos ni repeticiones: el primer bloque empieza en la primera línea indicada, cada bloque empieza en la línea siguiente al anterior y el último acaba en la última línea indicada.\n- Cada bloque agrupa de 1 a 15 líneas que van juntas (una función corta, un if, un formulario…). Las líneas en blanco van con el bloque de al lado.\n- "imp" es la importancia para el examen: 3 = clave (lógica principal, comunicación cliente-servidor, seguridad, datos), 2 = importante, 1 = normal, 0 = secundario (estructura, estilos, cosas repetidas).\n- En español. Los nombres de código van entre « » (por ejemplo «fetch», «$_POST»). No copies el código en las explicaciones.\n\nCódigo (cada línea empieza por su número):\n\n' + j.parts.map(x => { const n = CL.lineCount(c.CODE.files[x.p]); return "=== " + x.p + " (líneas " + x.from + "-" + x.to + " de " + n + ") ===\n" + numbered(c, x.p, x.from, x.to); }).join("\n\n");
     if (j.kind === "gloss") return intro(c) + 'Haz un glosario de los conceptos de programación que aparecen en este proyecto y que el estudiante debe saber explicar (funciones del lenguaje, palabras clave, estructuras, APIs, formatos…). Entre 12 y 24 conceptos, de más a menos importante.\n\n' + JSONONLY + ' Forma exacta:\n{"glossary":[{"term":"nombre corto, por ejemplo fetch() o $_SESSION","cat":"lenguaje o tema: PHP, JavaScript, HTML, CSS, SQL, Java…","easy":"qué es, en una frase corta","easyLong":"explicado fácil para alguien que empieza, con una comparación de la vida real, 2-3 frases","tech":"explicación técnica, 1-3 frases","code":"1 a 3 líneas copiadas tal cual del proyecto donde se usa","file":"ruta del archivo","line":12}]}\n\nEn español. Nombres de código entre « ».\n\n' + summaries(c) + 'Código:\n\n' + codeBundle(c, 90000);
     if (j.kind === "exam") return intro(c) + 'Escribe preguntas de examen de dificultad ' + DT[j.diff].toUpperCase() + ' sobre este proyecto: ' + DD[j.diff] + '\n\n' + JSONONLY + ' Forma exacta:\n{"questions":[{"type":"mc","q":"pregunta","options":["opción a","opción b","opción c","opción d"],"answer":0,"why":"por qué es la correcta, 1-2 frases","wrong":["por qué la a no es (vacío si es la correcta)","…b","…c","…d"],"file":"ruta","line":12},{"type":"written","q":"pregunta para responder en 2-5 frases","model":"respuesta modelo de 2-5 frases","keyTerms":["3 a 6 conceptos o nombres que una buena respuesta debe decir"],"wrong":["0 a 3 ideas falsas típicas"],"file":"ruta","line":12}]}\n\nReglas:\n- Exactamente 20 de tipo "mc" y 6 de tipo "written".\n- Tratan sobre ESTE código: qué hace una función, qué pasa si…, por qué se usa…, qué devuelve…, en qué archivo está….\n- En las de test solo una opción es correcta y las otras son creíbles; reparte la correcta entre a, b, c y d.\n- "answer" es la posición de la correcta: 0 = a, 1 = b, 2 = c, 3 = d.\n- "file" y "line" señalan dónde se ve la respuesta en el código.\n- En español. Nombres de código entre « ».\n\n' + summaries(c) + 'Código:\n\n' + codeBundle(c, 90000);
@@ -548,7 +602,7 @@ window.CLAI = (function () {
     return {id: "p-" + c.pid, kind: "proyecto", title: c.P.name + " (" + c.P.subj + ")",
       intro: intro(c) + "Vas a prepararle el repaso de su proyecto por partes. Para cada parte, crea el objeto JSON exacto que piden sus instrucciones y guárdalo con clarea_guardar. En español; los nombres de código entre « ».",
       parts: jobs.map(j => ({id: j.id, title: jobTitle(c, j), instructions: partText(c, j)})),
-      context: "### CÓDIGO DEL PROYECTO (cada línea empieza por su número)\n" + summaries(c) + codeBundle(c, 600000)};
+      context: "### " + codeLabel(c).toUpperCase() + " DEL PROYECTO (cada línea empieza por su número)\n" + summaries(c) + codeBundle(c, 600000)};
   }
   /* the whole project in ONE message, for a chat (Claude Pro, ChatGPT Plus…): the code once, then every part */
   function promptAll(c, jobs) {
@@ -563,7 +617,7 @@ window.CLAI = (function () {
       + "CÓMO RESPONDER (muy importante: una app lee tu respuesta automáticamente):\n"
       + "- Para cada tarea escribe una línea «### PARTE: ID» (el ID tal cual: " + jobs.map(j => j.id).join(", ") + ") y debajo SOLO su objeto JSON válido, sin ``` ni explicaciones.\n"
       + "- Hazlas en orden. Si no te caben todas en un mensaje, acaba la parte que estés escribiendo, para y escribe «SIGUE». Cuando el estudiante te escriba «sigue», continúa con la parte siguiente, sin repetir ninguna.\n\n"
-      + tasks.join("\n\n") + "\n\n### CÓDIGO DEL PROYECTO (cada línea empieza por su número)\n" + summaries(c) + codeBundle(c, 600000);
+      + tasks.join("\n\n") + "\n\n### " + codeLabel(c).toUpperCase() + " DEL PROYECTO (cada línea empieza por su número)\n" + summaries(c) + codeBundle(c, 600000);
   }
   // a chat answer to promptAll: saves every part it brings; says which ones came and which could not be read
   function applyAll(c, jobs, text) {
@@ -1022,7 +1076,7 @@ window.CLAI = (function () {
   /* ---------- «Pregúntale a tu IA»: a chat about a project or an exam question (kept with the account) ---------- */
   function projectContext(pid) {
     const c = ctx(pid); if (!c) return "";
-    return intro(c) + "Te va a hacer preguntas sobre su código. " + summaries(c) + "Código:\n\n" + codeBundle(c, 60000);
+    return intro(c) + "Te va a hacer preguntas sobre su " + (isDoc(c) ? "trabajo" : "código") + ". " + summaries(c) + codeLabel(c) + ":\n\n" + codeBundle(c, 60000);
   }
   const chatFmt = t => esc(t).replace(/```[a-z]*\n?([\s\S]*?)```/g, (m, x) => "<pre>" + x + "</pre>").replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/«(.+?)»/g, "<code>$1</code>").replace(/\n/g, "<br>");
   function openChat(o) {
@@ -1194,11 +1248,15 @@ window.CLAI = (function () {
      Each one goes as its own task (the same as from its page), Claude reads them all with clarea_pendiente in one chat,
      and each page collects its part when it is opened; Inicio shows how it goes («Para hoy»). ---------- */
   // the instructions for a part of exam questions (also used by the questions page)
+  // the student's course: saved with the questions when they were imported (or the class chosen in Clarea)
+  const qCourse = S => String(S.course || ((lget("clarea-group") || {}).g) || "").slice(0, 120);
+  // «profesor de X (name), en el curso «…»»: any course, not only one
+  const qTeacher = S => { const c = qCourse(S); return 'profesor de ' + S.subj + (S.subjName ? ' (' + S.subjName + ')' : '') + (c ? ', en el curso «' + c + '»' : ''); };
   function qPromptFor(S, part) {
     const lang = S.lang === "ca" ? "en catalán" : "en español";
-    return 'Eres profesor de Desarrollo de Aplicaciones Web (DAW). Un estudiante prepara el examen de ' + S.subj + (S.subjName ? ' (' + S.subjName + ')' : '') + '. El profesor les ha dado estas preguntas, que son las que caerán en el examen. Algunas tienen faltas de ortografía o están a medias: entiéndelas como mejor encaje en la asignatura.\n\n'
+    return 'Eres ' + qTeacher(S) + '. Un estudiante prepara el examen de esta asignatura. El profesor les ha dado estas preguntas, que son las que caerán en el examen. Algunas tienen faltas de ortografía o están a medias: entiéndelas como mejor encaje en la asignatura.\n\n'
       + 'Responde SOLO con un objeto JSON válido, sin texto antes ni después y sin ```. Forma exacta:\n{"items":[{"n":1,"q":"la pregunta bien escrita","level":"facil|media|dificil","why":"por qué tiene esa dificultad, 1 frase","short":"la respuesta en 1-2 frases","answer":"la respuesta completa para el examen: 5-10 frases bien organizadas, con definiciones y el porqué","points":["3 a 6 ideas que no pueden faltar"],"keyTerms":["3 a 6 conceptos o palabras clave que el profe espera leer"],"example":"un ejemplo concreto o un trozo de código corto, si ayuda (si no, vacío)","mistakes":["1 a 3 errores típicos o confusiones"],"tip":"un truco para recordarla"}]}\n\n'
-      + 'Reglas:\n- Una entrada por cada pregunta, con su mismo número "n".\n- Todo ' + lang + '. Los nombres de código entre « » (por ejemplo «let», «Express»).\n- "level": facil = definición directa; media = hay que explicar o comparar; dificil = varios conceptos, ejemplos o razonamiento.\n- Si la pregunta trae una pista del profe, úsala.\n\nPreguntas:\n'
+      + 'Reglas:\n- Una entrada por cada pregunta, con su mismo número "n".\n- Todo ' + lang + '. Los nombres técnicos, fórmulas o trozos de código entre « ».\n- "level": facil = definición directa; media = hay que explicar o comparar; dificil = varios conceptos, ejemplos o razonamiento.\n- Si la pregunta trae una pista del profe, úsala.\n\nPreguntas:\n'
       + part.map(q => q.n + ". " + q.q + (q.hint ? "  [Pista del profe: " + q.hint + "]" : "")).join("\n");
   }
   const QCHUNK = 5, qChunkId = p => "c" + p[0].n + "-" + p[p.length - 1].n;
@@ -1292,7 +1350,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {qPromptFor, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  return {qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
