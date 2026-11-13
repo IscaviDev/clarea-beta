@@ -8,7 +8,7 @@
 <meta property="og:title" content="Clarea Beta">
 <meta property="og:description" content="La versión en pruebas de Clarea: lo nuevo, antes que nadie.">
 <meta property="og:url" content="https://beta.clarea.dev/">
-<meta property="og:image" content="https://beta.clarea.dev/og-image.png?v=20261113003543">
+<meta property="og:image" content="https://beta.clarea.dev/og-image.png?v=20261113013537">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Logo de Clarea Beta">
@@ -78,9 +78,9 @@ code{background:var(--sunk);border-radius:5px;padding:1px 5px;font-size:13.5px}
 <section class="box"><h2>Qué datos se guardan</h2>
 <ul>
 <li><b>Tu usuario</b>: el nombre que eliges al crear la cuenta. No se pide correo ni nombre real.</li>
-<li><b>Tu contraseña</b>: la gestiona Firebase Authentication (de Google), que la guarda cifrada. Clarea nunca la ve ni la guarda tal cual. En tu dispositivo se guarda solo un resumen cifrado, para poder entrar sin internet.</li>
-<li><b>Lo que haces en la app</b>: la clase que eliges, tus faltas de asistencia, tus eventos del calendario (con sus notas), los proyectos que subes (su código y sus explicaciones) y tu progreso en los exámenes de práctica.</li>
-<li><b>Preferencias de este dispositivo</b>: el tema claro u oscuro.</li>
+<li><b>Tu contraseña</b>: la gestiona Firebase Authentication (de Google), que la guarda cifrada. Clarea nunca la guarda tal cual. En tu dispositivo queda solo un resumen protegido, para poder entrar sin internet.</li>
+<li><b>Face ID</b> (si lo activas): lo comprueba tu móvil. Clarea no ve tu cara ni tu huella; solo guarda en ese dispositivo un identificador de la llave.</li>
+<li><b>Lo que haces en la app</b>: tu clase, faltas, eventos del calendario, notas, tareas, los proyectos que subes (su código y explicaciones), tu progreso en los exámenes de práctica y tus preferencias (como el tema claro u oscuro).</li>
 </ul>
 </section>
 
@@ -94,16 +94,25 @@ code{background:var(--sunk);border-radius:5px;padding:1px 5px;font-size:13.5px}
 </section>
 
 <section class="box"><h2>Servicios que solo se usan si tú los eliges</h2>
+<p>Funcionan con un servidor de Clarea en Cloudflare.</p>
 <ul>
-<li><b>Tu IA</b> (Claude, ChatGPT, Gemini u OpenRouter): si pones tu clave, se guarda <b>en tu cuenta</b> (para tenerla en todos tus dispositivos) y puedes borrarla cuando quieras en Configuración. El código de tu proyecto se envía directamente desde tu dispositivo a ese proveedor, con sus propias condiciones.</li>
-<li><b>GitHub</b>: si enlazas un repositorio, Clarea consulta su información pública (código, ramas, commits y pull requests).</li>
-<li><b>Generar en la nube</b> (Cloudflare): si lo activas en Configuración, al generar un proyecto se envían a un servicio de Clarea en Cloudflare las instrucciones de cada parte (con tu código) y tu clave de la IA, para que tu IA lo genere aunque cierres Clarea. Tu clave se borra al terminar el trabajo, y todo lo demás (instrucciones y respuestas) se borra al recogerlo o, como mucho, a los 3 días.</li>
-<li><b>Avisos en el móvil</b> (Cloudflare): si los activas, se guardan en un servicio de Clarea en Cloudflare la dirección de avisos de tu dispositivo y tus próximos recordatorios (título, asignatura y hora de cada entrega o examen), para enviártelos aunque Clarea esté cerrada. No se guarda tu usuario: solo un código aleatorio de tu cuenta. Los recordatorios se borran al pasar su fecha, y todo se borra al desactivar los avisos en todos tus dispositivos.</li>
+<li><b>Sincronizar al instante</b>: con Clarea abierta, tu dispositivo mantiene una conexión con el servidor que solo avisa «hay cambios» a tus otros dispositivos. Tus datos no pasan por ella ni se guardan.</li>
+<li><b>Copias semanales</b> (con la cuenta sincronizada): una copia comprimida de tus datos cada semana. Se quedan las 4 últimas (como mucho 60 días) y se borran al eliminar la cuenta.</li>
+<li><b>Tus dispositivos</b>: de cada dispositivo con tu cuenta abierta, un código aleatorio, su tipo (por ejemplo «iPhone · Safari») y cuándo se usó por última vez. Se olvida a los 60 días sin usarlo, al cerrarlo o al eliminar la cuenta.</li>
+<li><b>Código de recuperación</b>: se guarda tu usuario y un resumen del código (nunca el código en sí). Se borra al usarlo, al crear otro o al eliminar la cuenta.</li>
+<li><b>Gemini</b>: si pones tu clave, se guarda en tu cuenta y puedes borrarla en Configuración. Lo que le pides se envía a Google, con sus propias condiciones.</li>
+<li><b>Generar en la nube</b>: se envían las instrucciones (con tu código) y tu clave de Gemini, para que siga aunque cierres Clarea. La clave se borra al terminar, y lo demás al recogerlo o, como mucho, a los 3 días.</li>
+<li><b>Enviar a Claude</b> (conector): las tareas que mandas a tu Claude se guardan con un código aleatorio de tu cuenta, como mucho 14 días. Claude las lee con tu propia cuenta de Claude.</li>
+<li><b>Amigos y grupos</b>: tu usuario, tu código de amigo, tus amigos y solicitudes, y de cada grupo su nombre, miembros, eventos, tareas, mensajes y fotos. Lo ven solo tus amigos o los miembros del grupo.</li>
+<li><b>Compartir un repaso</b>: quien tenga el enlace puede verlo. Se borra al dejar de compartirlo o a los 180 días.</li>
+<li><b>Leer un enlace</b> (por ejemplo, una hoja de evaluación): la página se pide a través del servidor y no se guarda.</li>
+<li><b>Avisos en el móvil</b>: la dirección de avisos de tu dispositivo y tus próximos recordatorios (título, asignatura y hora), con un código aleatorio en vez de tu usuario. Se borran al pasar su fecha o al desactivar los avisos.</li>
+<li><b>GitHub</b>: si enlazas un repositorio, Clarea consulta su información pública.</li>
 </ul>
 </section>
 
 <section class="box"><h2>Para qué se usan</h2>
-<p>Solo para darte el servicio que pides al crear la cuenta: ver tus asignaturas, apuntar faltas y eventos, repasar tus proyectos y tenerlo todo igual en el móvil y en el ordenador.</p>
+<p>Solo para darte el servicio que pides: ver tus asignaturas, apuntar faltas y eventos, repasar tus proyectos, estudiar con tus amigos y tenerlo todo igual en el móvil y en el ordenador.</p>
 </section>
 
 <section class="box"><h2>Cookies</h2>
@@ -111,7 +120,7 @@ code{background:var(--sunk);border-radius:5px;padding:1px 5px;font-size:13.5px}
 </section>
 
 <section class="box"><h2>Cuánto tiempo y cómo borrarlos</h2>
-<p>Tus datos se guardan mientras tengas la cuenta. Puedes borrarlo todo cuando quieras desde <b>el menú de tu cuenta → «Eliminar mi cuenta»</b>: se borra de la nube al momento, y también de ese dispositivo. En otros dispositivos, al cerrar sesión ya no se puede volver a entrar.</p>
+<p>Tus datos se guardan mientras tengas la cuenta. Lo que borras se queda 30 días en la papelera (Yo → «Papelera») y después se borra solo; puedes vaciarla antes. Puedes borrarlo todo cuando quieras desde <b>Mi cuenta → «Eliminar mi cuenta»</b>: se borra al momento de la nube y del servidor de Clarea (también tus amigos, grupos y código de recuperación), y de ese dispositivo. En tus otros dispositivos, la sesión se cierra en cuanto se conectan a internet.</p>
 </section>
 
 <section class="box"><h2>Tus derechos</h2>

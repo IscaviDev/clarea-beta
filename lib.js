@@ -125,6 +125,12 @@ window.CL = (function () {
       return r.text();
     }}));
   }
+  // the newest commit of the main branch (one request)
+  async function latestCommit(full) {
+    const l = await gh("/repos/" + full + "/commits?per_page=1"), c = l && l[0];
+    if (!c) return null;
+    return {sha: c.sha, date: (c.commit && c.commit.committer && c.commit.committer.date) || (c.commit && c.commit.author && c.commit.author.date) || "", msg: ((c.commit && c.commit.message) || "").split(String.fromCharCode(10))[0].slice(0, 120)};
+  }
   /* branches, commits and pull requests, kept small enough to sync */
   async function gitHistory(full, def, onProgress) {
     const say = t => onProgress && onProgress(t);
@@ -289,7 +295,7 @@ window.CL = (function () {
     return JSON.parse(s);
   }
 
-  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, carryBlocks, secretsOf, maskSecrets, MAX_TOTAL};
+  return {collect, folderEntries, zipEntries, parseRepo, repoInfo, githubEntries, latestCommit, gitHistory, ghMsg, langOf, ext, functionsOf, lineCount, carryBlocks, secretsOf, maskSecrets, MAX_TOTAL};
 })();
 
 ;
@@ -623,6 +629,42 @@ window.CLAI = (function () {
     if (!c.save()) throw new Error("No queda espacio en este dispositivo.");
   }
 
+  /* ---------- the free use of Gemini today: Google doesn't say how much is left, so Clarea counts the requests (on every device:
+     it goes with the account) and compares them with the usual free limit of the model. It is an estimate: «unas». ---------- */
+  const PT = "America/Los_Angeles";                                          // the free use is renewed at midnight in California
+  const ptDay = () => new Date().toLocaleDateString("en-CA", {timeZone: PT});
+  const FREE = m => /pro/.test(m) ? 0 : /flash-lite/.test(m) ? 500 : /flash/.test(m) ? 20 : null;
+  function useGet() { const u = lget("clarea-aiuse") || {}; return u.day === ptDay() ? u : {day: ptDay(), n: {}, out: {}}; }
+  function useAdd(model, k) { if (!model) return; const u = useGet(); u.n[model] = (u.n[model] || 0) + (k || 1); u.t = Date.now(); lset("clarea-aiuse", u); }
+  function useOut(model) { const u = useGet(); u.out[model] = Date.now(); u.t = Date.now(); lset("clarea-aiuse", u); }
+  // the local hour when it is renewed (midnight in California: 9:00 in Spain in winter)
+  function renewAt() {
+    const d = new Date(), off = tz => (new Date(d.toLocaleString("en-US", {timeZone: tz})) - new Date(d.toLocaleString("en-US", {timeZone: "UTC"}))) / 36e5;
+    const h = (((-d.getTimezoneOffset() / 60) - off(PT)) % 24 + 24) % 24;
+    return Math.floor(h) + ":" + String(Math.round((h % 1) * 60)).padStart(2, "0");
+  }
+  function useInfo() {
+    const c = cfg(), model = (c.models || {}).gemini || "", u = useGet(), used = u.n[model] || 0, limit = FREE(model);
+    return {model, used, limit, left: limit == null ? null : Math.max(0, limit - used), out: !!u.out[model], renew: renewAt()};
+  }
+  // one short line for Configuración
+  function useLine() {
+    const x = useInfo(); if (!x.model) return "";
+    if (x.out) return "Has gastado el uso gratis de hoy con «" + esc(x.model) + "». Se renueva a las " + x.renew + ".";
+    if (x.limit === 0) return "«" + esc(x.model) + "» no tiene uso gratis: elige un modelo «Flash-Lite».";
+    if (x.limit == null) return x.used ? "Hoy llevas " + x.used + " peticiones con «" + esc(x.model) + "». Se renueva a las " + x.renew + "." : "";
+    return "Uso gratis hoy: unas " + x.used + " de " + x.limit + " peticiones. Te quedan unas " + x.left + ". Se renueva a las " + x.renew + ".";
+  }
+  // a few words, for the card of Gemini in Configuración
+  function useShort() { const x = useInfo(); return !x.model ? "" : x.out ? "gastado hasta las " + x.renew : x.left != null && x.limit ? "quedan unas " + x.left + " gratis hoy" : ""; }
+  // a notice in the ✦ IA tab when what is left today is not enough for what is missing
+  function useWarn(need) {
+    const x = useInfo(); if (!need || !x.model) return "";
+    const t = x.out ? "Has gastado el uso gratis de hoy de Gemini. Lo que falta se hará a partir de las " + x.renew + "."
+      : x.left != null && x.left < need ? "Hoy te quedan unas " + x.left + " peticiones gratis de Gemini y hacen falta " + need + ": puede que una parte se haga a partir de las " + x.renew + "." : "";
+    return t ? '<p class="aimsg" role="status">' + t + '</p>' : "";
+  }
+
   /* ---------- calling the user's own AI (straight from the browser, with their key) ---------- */
   async function listModels(prov, key) {
     const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" + encodeURIComponent(key));
@@ -649,7 +691,7 @@ window.CLAI = (function () {
     if (prov === "gemini" && r.status === 429) {
       let q;
       if (/limit:\s*0\b/.test(m)) { q = new Error("Tu clave gratis no puede usar el modelo «" + model + "»: Google no da uso gratis de ese modelo. Cambia a otro modelo y sigue."); q.retry = false; q.quotaKind = "model"; }
-      else if (/PerDay/i.test(quota) || /per day|daily/i.test(m)) { q = new Error("Has gastado el uso gratis de hoy de tu clave de Gemini con «" + model + "». Se renueva cada día: sigue mañana o cambia a otro modelo, que tiene su propio límite. Lo ya hecho se queda guardado."); q.retry = false; q.quotaKind = "day"; }
+      else if (/PerDay/i.test(quota) || /per day|daily/i.test(m)) { useOut(model); q = new Error("Has gastado el uso gratis de hoy de tu clave de Gemini con «" + model + "». Se renueva cada día: sigue mañana o cambia a otro modelo, que tiene su propio límite. Lo ya hecho se queda guardado."); q.retry = false; q.quotaKind = "day"; }
       else { q = new Error("Gemini: has llegado al límite por minuto del uso gratis."); q.retry = true; q.wait = Math.min(Math.max(after || 60, 15), 120); q.why = "Límite por minuto del uso gratis de Gemini"; }
       q.status = 429; q.detail = m; return q;
     }
@@ -686,6 +728,7 @@ window.CLAI = (function () {
     try {
       const body = {contents: [{role: "user", parts: files.map(f => ({inline_data: {mime_type: f.mime, data: f.b64}})).concat([{text}])}]}; if (wantJSON) body.generationConfig = {responseMimeType: "application/json"};
       r = await fetch(GEMINI + "/v1beta/models/" + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(key), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body), signal});
+      if (r.status !== 429) useAdd(model);
       if (!r.ok) throw await apiErr(r, prov);
       const j = await r.json(), cand = j.candidates && j.candidates[0];
       if (!cand) throw new Error("Gemini no ha devuelto respuesta" + (j.promptFeedback && j.promptFeedback.blockReason ? " (" + j.promptFeedback.blockReason + ")." : "."));
@@ -798,6 +841,7 @@ window.CLAI = (function () {
     const k = window.clareaPushK ? await window.clareaPushK() : null;
     const r = await fetch(PUSHURL() + "/gen", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({prov, model: cfg().models[prov], alts, key: cf.keys[prov], k, title: o.title, url: o.url, parts: o.parts})});
+    if (r.ok) useAdd(cfg().models[prov], o.parts.length);
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(r.status === 413 ? "Es demasiado grande para la nube." : "error " + r.status);
     return {id: j.id, s: j.secret, push: !!k, at: Date.now()};
@@ -829,6 +873,7 @@ window.CLAI = (function () {
       const k = window.clareaPushK ? await window.clareaPushK() : null;
       const r = await fetch(PUSHURL() + "/gen", {method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({prov, model: cfg().models[prov], alts, key: cf.keys[prov], k, title: q.name, url: "proyecto.html?id=" + encodeURIComponent(q.pid), parts})});
+      if (r.ok) useAdd(cfg().models[prov], parts.length);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(r.status === 413 ? "El proyecto es demasiado grande para generarlo en la nube." : "error " + r.status);
       q = qGet(); if (!q) return;
@@ -998,7 +1043,8 @@ window.CLAI = (function () {
     const paint = () => {
       paintVia();
       box.innerHTML = (msgs.length ? "" : '<p class="chathint">' + esc(o.hint || "Pregunta lo que quieras: tu IA responde con este contenido delante.") + (ready() || mcpOn() ? "" : " <b>Primero conecta Claude o pon tu clave de Gemini en Mi cuenta → Configuración.</b>") + '</p>')
-        + msgs.map(m => '<div class="chatb ' + (m.r === "u" ? "me" : "ai") + '">' + (m.r === "u" ? esc(m.t).replace(/\n/g, "<br>") : chatFmt(m.t)) + '</div>').join("")
+        + msgs.map((m, i) => '<div class="chatb ' + (m.r === "u" ? "me" : "ai") + '">' + (m.r === "u" ? esc(m.t).replace(/\n/g, "<br>") : chatFmt(m.t)) + '</div>'
+          + (o.subj && m.r === "a" && i && msgs[i - 1].r === "u" && !/^No (he podido|se ha podido)/.test(m.t) ? (m.saved ? '<p class="chatsaved">✓ Guardada para repasar en «Mis dudas de ' + esc(o.subj) + '»</p>' : '<button type="button" class="chatsave" data-chatsave="' + i + '">Guardar para repasar</button>') : '')).join("")
         + (busyNow ? '<div class="chatb ai wait"><i></i><i></i><i></i></div>' : "")
         + (pend ? '<div class="chatb ai claude"><b>Pregunta enviada a Claude.</b> Pulsa enviar en Claude: te responde allí, y su respuesta aparecerá aquí también. <button type="button" class="chatreopen">Abrir Claude otra vez</button> <button type="button" class="chatnopend">Dejar de esperar</button></div>' : "")
         + (msgs.length ? '<button type="button" class="chatclear">Borrar la conversación</button>' : "");
@@ -1018,6 +1064,10 @@ window.CLAI = (function () {
     w.addEventListener("click", ev => {
       if (ev.target === w || ev.target.closest(".chatx")) close();
       else if (ev.target.closest(".chatclear")) { msgs = []; pend = null; save(); paint(); }
+      else if (ev.target.closest("[data-chatsave]")) {
+        const i = +ev.target.closest("[data-chatsave]").dataset.chatsave, a = msgs[i], q = msgs[i - 1];
+        if (a && q && !a.saved) { saveDoubt(o.subj, q.t + (o.about ? " (sobre «" + o.about + "»)" : ""), a.t); a.saved = true; save(); paint(); if (window.clareaToast) window.clareaToast("Guardada en «Mis dudas de " + o.subj + "»: sale al repasar."); }
+      }
       else if (ev.target.closest(".chatreopen") && pend) mcpOpenClaude(pend.msg);
       else if (ev.target.closest(".chatnopend")) { if (pend) mcpDrop(pend.id); pend = null; save(); paint(); }
       else { const v = ev.target.closest("[data-via]"); if (v) { const c = cfg(); c.chatVia = v.dataset.via; cfgSet(c); paint(); } }
@@ -1047,7 +1097,8 @@ window.CLAI = (function () {
     });
     document.body.appendChild(w); paint(); ta.focus(); if (pend) poll();
     if (!document.getElementById("chatviacss")) { const st = document.createElement("style"); st.id = "chatviacss";
-      st.textContent = '.chatvia{display:flex;align-items:center;gap:6px;padding:0 14px 8px;font-size:13px;color:var(--muted)}.chatvia[hidden]{display:none}.chatvia button{font:inherit;font-size:13px;font-weight:700;color:var(--fg);background:var(--surface);border:1.5px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer}.chatvia button.on{background:var(--accent);border-color:var(--accent);color:#fff}'
+      st.textContent = '.chatvia{display:flex;align-items:center;gap:6px;padding:0 14px 8px;font-size:13px;color:var(--muted)}.chatvia[hidden]{display:none}.chatvia button{font:inherit;font-size:13px;font-weight:700;color:var(--fg);background:var(--surface);border:1.5px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer}.chatvia button.on{background:var(--accent);border-color:var(--accent);color:#fff}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .chatvia button.on{color:#14171b}}:root[data-theme="dark"] .chatvia button.on{color:#14171b}'
+        + '.chatsave{align-self:flex-start;font:inherit;font-size:13px;font-weight:700;color:var(--accent-ink,var(--accent));background:none;border:1.5px solid var(--line);border-radius:999px;padding:5px 12px;cursor:pointer;margin:-2px 0 4px}@media (hover:hover){.chatsave:hover{border-color:var(--accent)}}.chatsaved{margin:-2px 0 4px;font-size:12.5px;color:var(--muted)}'
         + '.chatb.claude{border:1.5px dashed var(--accent)}.chatb.claude button{font:inherit;font-size:13px;font-weight:700;color:var(--accent-ink,var(--accent));background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;margin-right:8px}';
       document.head.appendChild(st); }
   }
@@ -1119,6 +1170,77 @@ window.CLAI = (function () {
   }
   document.addEventListener("click", e => { const b = e.target.closest("[data-aipick]"); if (b && !b.disabled) { e.preventDefault(); pick(b.dataset.aipick, b); } });
 
+  /* a good answer of the chat, kept as an exam question already prepared, in «Mis dudas de <subject>»:
+     it goes into the rounds, «Para hoy» and the mock exams like any other question */
+  function saveDoubt(subj, q, a) {
+    const L = lget("clarea-qsets") || {}, list = L.list || [];
+    let S = list.find(x => x.dudas && x.subj === subj);
+    if (!S) {
+      const o = list.find(x => x.subj === subj) || {};
+      S = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), subj, subjName: o.subjName || "", name: "Mis dudas de " + subj, lang: o.lang || "es", qs: [], created: Date.now(), dudas: true};
+      if (o.group) S.group = o.group;
+      list.push(S);
+    }
+    const n = S.qs.reduce((m, x) => Math.max(m, +x.n || 0), 0) + 1, qt = String(q).replace(/\s+/g, " ").trim().slice(0, 400), at = String(a).trim().slice(0, 4000);
+    S.qs.push({n, q: qt});
+    lset("clarea-qsets", {t: Date.now(), list});
+    const k = "clarea-qai-" + S.id, A = lget(k) || {}; A.items = A.items || {};
+    A.items[n] = {q: qt, level: "media", why: "", short: (at.match(/^[\s\S]*?[.!?](\s|$)/) || [at])[0].trim().slice(0, 600), answer: at, points: [], keyTerms: [], example: "", mistakes: [], tip: "", from: "chat"};
+    A.t = Date.now(); lset(k, A);
+    return S;
+  }
+
+  /* ---------- «Enviar a Claude lo pendiente»: every project and every set of exam questions with something to prepare, in one go.
+     Each one goes as its own task (the same as from its page), Claude reads them all with clarea_pendiente in one chat,
+     and each page collects its part when it is opened; Inicio shows how it goes («Para hoy»). ---------- */
+  // the instructions for a part of exam questions (also used by the questions page)
+  function qPromptFor(S, part) {
+    const lang = S.lang === "ca" ? "en catalán" : "en español";
+    return 'Eres profesor de Desarrollo de Aplicaciones Web (DAW). Un estudiante prepara el examen de ' + S.subj + (S.subjName ? ' (' + S.subjName + ')' : '') + '. El profesor les ha dado estas preguntas, que son las que caerán en el examen. Algunas tienen faltas de ortografía o están a medias: entiéndelas como mejor encaje en la asignatura.\n\n'
+      + 'Responde SOLO con un objeto JSON válido, sin texto antes ni después y sin ```. Forma exacta:\n{"items":[{"n":1,"q":"la pregunta bien escrita","level":"facil|media|dificil","why":"por qué tiene esa dificultad, 1 frase","short":"la respuesta en 1-2 frases","answer":"la respuesta completa para el examen: 5-10 frases bien organizadas, con definiciones y el porqué","points":["3 a 6 ideas que no pueden faltar"],"keyTerms":["3 a 6 conceptos o palabras clave que el profe espera leer"],"example":"un ejemplo concreto o un trozo de código corto, si ayuda (si no, vacío)","mistakes":["1 a 3 errores típicos o confusiones"],"tip":"un truco para recordarla"}]}\n\n'
+      + 'Reglas:\n- Una entrada por cada pregunta, con su mismo número "n".\n- Todo ' + lang + '. Los nombres de código entre « » (por ejemplo «let», «Express»).\n- "level": facil = definición directa; media = hay que explicar o comparar; dificil = varios conceptos, ejemplos o razonamiento.\n- Si la pregunta trae una pista del profe, úsala.\n\nPreguntas:\n'
+      + part.map(q => q.n + ". " + q.q + (q.hint ? "  [Pista del profe: " + q.hint + "]" : "")).join("\n");
+  }
+  const QCHUNK = 5, qChunkId = p => "c" + p[0].n + "-" + p[p.length - 1].n;
+  function qPending(S) {
+    const A = (lget("clarea-qai-" + S.id) || {}).items || {}, out = [];
+    for (let i = 0; i < (S.qs || []).length; i += QCHUNK) { const p = S.qs.slice(i, i + QCHUNK); if (p.some(q => !A[q.n])) out.push(p); }
+    return out;
+  }
+  // what is left to prepare and not sent yet
+  function pendingAll() {
+    const out = [];
+    ((lget("clarea-projs") || {}).list || []).forEach(P => {
+      if (lget("clarea-mcpt-p-" + P.id)) return;
+      const c = ctx(P.id); if (!c) return;
+      const jobs = buildJobs(c, {paste: true}).filter(j => !isDone(c, j));
+      if (jobs.length) out.push({kind: "p", id: P.id, name: P.name, c, jobs});
+    });
+    ((lget("clarea-qsets") || {}).list || []).forEach(S => {
+      if (S.dudas || lget("clarea-mcpt-q-" + S.id)) return;
+      const parts = qPending(S);
+      if (parts.length) out.push({kind: "q", id: S.id, name: S.name, S, parts});
+    });
+    return out;
+  }
+  async function sendAll(list) {
+    let n = 0;
+    for (const x of list || pendingAll()) {
+      try {
+        if (x.kind === "p") {
+          await mcpPush(mcpProjectTask(x.c, x.jobs));
+          lset("clarea-mcpt-p-" + x.id, {t: Date.now(), parts: x.jobs.map(j => j.id)});
+        } else {
+          await mcpPush({id: "q-" + x.id, kind: "preguntas", title: x.S.name + " (" + x.S.subj + ")", intro: "Prepara las respuestas de estas preguntas de examen, por partes. Para cada parte, crea el objeto JSON exacto que piden sus instrucciones y guárdalo con clarea_guardar.",
+            parts: x.parts.map(p => ({id: qChunkId(p), title: "Preguntas " + p[0].n + "–" + p[p.length - 1].n, instructions: qPromptFor(x.S, p)}))});
+          lset("clarea-mcpt-q-" + x.id, {t: Date.now(), parts: x.parts.map(qChunkId)});
+        }
+        n++;
+      } catch (err) {}
+    }
+    return n;
+  }
+
   /* ---------- notices ---------- */
   function askNotify() {
     try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
@@ -1170,7 +1292,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  return {qPromptFor, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
