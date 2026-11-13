@@ -2,8 +2,8 @@
    - Each published version has its own cache, filled when the new version is downloaded.
    - The new version waits until the user taps "Actualizar" (message SKIP_WAITING), then the page reloads.
    - Works without internet: everything is answered from the cache. */
-const CACHE = "clarea-20261113120847";
-const CORE = ["./", "./index.html", "./repaso-pj6.html", "./proyecto.html", "./preguntas.html", "./privacidad.html", "./lib.js?v=20261113120847", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
+const CACHE = "clarea-20261113122439";
+const CORE = ["./", "./index.html", "./repaso-pj6.html", "./proyecto.html", "./preguntas.html", "./privacidad.html", "./lib.js?v=20261113122439", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 function pageKey(req){ const p = new URL(req.url).pathname; return /repaso-pj6\.html$/.test(p) ? "./repaso-pj6.html" : /proyecto\.html$/.test(p) ? "./proyecto.html" : /preguntas\.html$/.test(p) ? "./preguntas.html" : /privacidad\.html$/.test(p) ? "./privacidad.html" : "./index.html"; }
 
