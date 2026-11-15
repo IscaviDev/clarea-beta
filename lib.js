@@ -494,11 +494,27 @@ window.CLAI = (function () {
     if (!r.ok) throw new Error(r.status === 413 ? "Es demasiado grande para enviarlo a Claude." : (r.status === 404 || (r.status === 400 && j.error === "key")) ? "El servidor de Clarea aún no tiene el conector (falta desplegarlo)." : "No se ha podido (" + (j.error || r.status) + ").");
     return j;
   }
-  async function mcpConnect() { const c = cfg(); c.mcp = {k: randKey(), t: Date.now()}; cfgSet(c); await mcpPost("/mcp-hello", {}); return mcpUrl(); }
+  // the account's Firebase pass (only with the account synced): it links the connector to the account, for the team's Claude
+  const mcpTok = async () => { try { return window.clareaIdToken ? await window.clareaIdToken() : null; } catch (e) { return null; } };
+  async function mcpConnect() {
+    const c = cfg(); c.mcp = {k: randKey(), t: Date.now()}; cfgSet(c);
+    const tok = await mcpTok(), r = await mcpPost("/mcp-hello", tok ? {tok, adopt: true} : {});
+    const d = cfg(); if (d.mcp) { if (r.k && /^[A-Za-z0-9_-]{32}$/.test(r.k)) d.mcp.k = r.k; if (r.linked) d.mcp.l = 1; cfgSet(d); }
+    return mcpUrl();
+  }
+  // connected before this existed: link it once (then the team's Claude finds it too)
+  async function mcpLink() {
+    if (!mcpOn() || cfg().mcp.l) return; const tok = await mcpTok(); if (!tok) return;
+    try { const r = await mcpPost("/mcp-hello", {tok}); if (r.linked) { const d = cfg(); if (d.mcp) { d.mcp.l = 1; cfgSet(d); } } } catch (e) {}
+  }
+  // the team's Claude: one address for everybody; each person signs in with their Clarea account
+  const mcpTeamUrl = () => PUSHURL() + "/mcp";
+  async function mcpTeamOff() { const tok = await mcpTok(); if (!tok) throw new Error("Activa la sincronización de tu cuenta (en Yo) para cerrar las sesiones."); return mcpPost("/mcp-team-off", {tok}); }
   async function mcpDisconnect() { try { await mcpPost("/mcp-forget", {}); } catch (e) {} const c = cfg(); delete c.mcp; cfgSet(c); }
   // with the task goes this device's notice address (if notices are on): the server tells the phone when Claude finishes
   async function mcpPush(task) {
     let pk = null; try { pk = window.clareaPushK ? await window.clareaPushK() : null; } catch (e) {}
+    await mcpLink();
     return mcpPost("/mcp-push", {task: Object.assign({url: (location.pathname.slice(new URL(document.baseURI).pathname.length) || "./") + location.search}, task), pk});
   }
   const mcpDrop = id => mcpPost("/mcp-drop", {id}).catch(() => {});
@@ -1316,6 +1332,36 @@ window.CLAI = (function () {
     return {cut: t.length > room};
   }
   const matDel = (subj, id) => matSet(subj, matGet(subj).filter(d => d.id !== id));
+  const matSig = subj => matGet(subj).map(d => d.id).join(",");      // which notes a summary was made from
+  // «Hacer preguntas de examen» and «Resumen por temas», from the notes (Gemini here, or Claude with the connector)
+  const NOTES_ASK = {
+    q: 'Con estos apuntes, escribe entre 15 y 30 preguntas de examen que el profesor podría poner: de las que se contestan por escrito, claras y concretas, que cubran todo el temario de los apuntes, de lo más importante a lo menos. En el mismo idioma que los apuntes. ' + JSONONLY + ' Forma exacta:\n{"title":"nombre corto para estas preguntas","questions":["pregunta 1","pregunta 2"]}',
+    r: 'Con estos apuntes, haz un resumen por temas para repasar antes del examen: un tema por cada apartado de los apuntes, en su orden, con sus mismos términos y en su mismo idioma. ' + JSONONLY + ' Forma exacta:\n{"topics":[{"title":"nombre del tema","short":"de qué va, en 1-2 frases","points":["una idea clave que hay que saber, en 1 frase"]}]} (entre 3 y 8 ideas por tema).'
+  };
+  function notesApply(subj, kind, data) {
+    if (kind === "q") {
+      const qs = (data && Array.isArray(data.questions) ? data.questions : []).map(q => String(q && typeof q === "object" ? q.q || q.text || "" : q || "").replace(/\s+/g, " ").replace(/^\s*\d+\s*[.)-]\s*/, "").trim()).filter(Boolean).slice(0, 60);
+      if (!qs.length) throw new Error("Tu IA no ha sacado preguntas de los apuntes.");
+      const L = lget("clarea-qsets") || {}, list = L.list || [], o = list.find(x => x.subj === subj) || {};
+      const S = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), subj, subjName: o.subjName || "", name: String(data.title || "Preguntas de los apuntes").slice(0, 60), lang: o.lang || "es",
+        qs: qs.map((q, i) => ({n: i + 1, q: q.slice(0, 400)})), created: Date.now(), fromNotes: true};
+      if (o.group) S.group = o.group;
+      list.push(S); lset("clarea-qsets", {t: Date.now(), list});
+      return {id: S.id, name: S.name, n: qs.length};
+    }
+    const topics = (data && Array.isArray(data.topics) ? data.topics : []).map(t => ({title: String(t && t.title || "").slice(0, 120), short: String(t && t.short || "").slice(0, 600),
+      points: (Array.isArray(t && t.points) ? t.points : []).map(x => String(x).slice(0, 400)).filter(Boolean).slice(0, 10)})).filter(t => t.title).slice(0, 40);
+    if (!topics.length) throw new Error("Tu IA no ha hecho el resumen.");
+    lset("clarea-matsum-" + subj, {t: Date.now(), sig: matSig(subj), topics});
+    return {n: topics.length};
+  }
+  async function notesRun(subj, kind, opt) {
+    const out = await callAI(matContext(subj, 150000) + NOTES_ASK[kind], true, null, null, opt);
+    return notesApply(subj, kind, parseJSON(out));
+  }
+  const notesTask = (subj, kind) => ({id: "m-" + subj + "-" + kind, kind: "apuntes", title: (kind === "q" ? "Preguntas de los apuntes de " : "Resumen de los apuntes de ") + subj,
+    intro: "El estudiante ha subido a Clarea los apuntes que da su profesor de " + subj + " (van en el material de esta tarea). Haz lo que pide la parte y guárdalo con clarea_guardar (parte «r»).",
+    parts: [{id: "r", title: kind === "q" ? "Preguntas de examen" : "Resumen por temas", instructions: NOTES_ASK[kind]}], context: matContext(subj, 3000000)});
   // what goes before the instructions of the AI (nothing if the subject has no notes)
   function matContext(subj, max) {
     const docs = subj ? matGet(subj) : []; if (!docs.length) return "";
@@ -1376,7 +1422,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
-          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
+  return {matSig, notesApply, notesRun, notesTask, matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+          listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpLink, mcpTeamUrl, mcpTeamOff, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
