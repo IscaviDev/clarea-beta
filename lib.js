@@ -450,7 +450,8 @@ window.CLAI = (function () {
   const codeLabel = c => isDoc(c) ? "Documento" : "Código";
   const JSONONLY = 'Responde SOLO con un objeto JSON válido, sin texto antes ni después y sin ```.';
   const stLabel = s => s === "merged" ? "Merged" : s === "open" ? "Abierto" : "Cerrado";
-  function prompt(c, j) {
+  function prompt(c, j) { return (j.kind === "gloss" || j.kind === "exam" ? matContext(c.P && c.P.subj, 60000) : "") + promptBase(c, j); }
+  function promptBase(c, j) {
     if (j.kind === "code" && isDoc(c)) return intro(c) + 'Explícale este documento por partes para que lo entienda y sepa explicarlo en el examen.\n\n' + JSONONLY + ' Forma exacta:\n{"files":{"RUTA":{"role":"tipo de documento en 2-5 palabras","what":"de qué trata y para qué sirve, 2-3 frases","blocks":[{"from":1,"to":8,"imp":3,"easy":"resumen sencillo de esa parte, 1-2 frases","tech":"explicación más completa, con los conceptos que hay que saber, 1-3 frases"}]}}}\n\nReglas:\n- En "files" van exactamente estos archivos, con la ruta tal cual: ' + j.parts.map(x => x.p).join(", ") + '.\n- "blocks" cubre TODAS las líneas indicadas de cada archivo, en orden y sin huecos ni repeticiones: el primer bloque empieza en la primera línea indicada, cada bloque empieza en la línea siguiente al anterior y el último acaba en la última línea indicada.\n- Cada bloque agrupa las líneas de una misma idea o apartado (de 1 a 15 líneas). Las líneas en blanco van con el bloque de al lado.\n- "imp" es la importancia para el examen: 3 = clave (ideas principales, definiciones, conclusiones), 2 = importante, 1 = normal, 0 = secundario (índice, portada, bibliografía, cosas repetidas).\n- En español. No copies el texto en las explicaciones.\n\nDocumento (cada línea empieza por su número):\n\n' + j.parts.map(x => { const n = CL.lineCount(c.CODE.files[x.p]); return "=== " + x.p + " (líneas " + x.from + "-" + x.to + " de " + n + ") ===\n" + numbered(c, x.p, x.from, x.to); }).join("\n\n");
     if (j.kind === "gloss" && isDoc(c)) return intro(c) + 'Haz un glosario de los conceptos clave de este trabajo que el estudiante debe saber explicar (términos, definiciones, procesos, autores, leyes, siglas…). Entre 12 y 24 conceptos, de más a menos importante.\n\n' + JSONONLY + ' Forma exacta:\n{"glossary":[{"term":"nombre corto del concepto","cat":"tema o apartado","easy":"qué es, en una frase corta","easyLong":"explicado fácil para alguien que empieza, con una comparación de la vida real, 2-3 frases","tech":"explicación precisa, 1-3 frases","code":"una frase copiada tal cual del documento donde sale","file":"ruta del archivo","line":12}]}\n\nEn español.\n\n' + summaries(c) + 'Documento:\n\n' + codeBundle(c, 90000);
     if (j.kind === "exam" && isDoc(c)) return intro(c) + 'Escribe preguntas de examen de dificultad ' + DT[j.diff].toUpperCase() + ' sobre este trabajo: ' + DDOC[j.diff] + '\n\n' + JSONONLY + ' Forma exacta:\n{"questions":[{"type":"mc","q":"pregunta","options":["opción a","opción b","opción c","opción d"],"answer":0,"why":"por qué es la correcta, 1-2 frases","wrong":["por qué la a no es (vacío si es la correcta)","…b","…c","…d"],"file":"ruta","line":12},{"type":"written","q":"pregunta para responder en 2-5 frases","model":"respuesta modelo de 2-5 frases","keyTerms":["3 a 6 conceptos que una buena respuesta debe decir"],"wrong":["0 a 3 ideas falsas típicas"],"file":"ruta","line":12}]}\n\nReglas:\n- Exactamente 20 de tipo "mc" y 6 de tipo "written".\n- Tratan sobre ESTE documento: qué significa…, por qué…, qué relación hay entre…, qué concluye….\n- En las de test solo una opción es correcta y las otras son creíbles; reparte la correcta entre a, b, c y d.\n- "answer" es la posición de la correcta: 0 = a, 1 = b, 2 = c, 3 = d.\n- "file" y "line" señalan dónde se ve la respuesta en el documento.\n- En español.\n\n' + summaries(c) + 'Documento:\n\n' + codeBundle(c, 90000);
@@ -1136,7 +1137,7 @@ window.CLAI = (function () {
           msgs.push({r: "u", t: q}); ta.value = ""; pend = {id: TID, msg, t: Date.now()}; save(); paint();
           mcpPush({id: TID, kind: "pregunta", title: "Pregunta: " + o.title,
             intro: "El estudiante te ha hecho una pregunta desde Clarea, sobre este contenido. Respóndele en el chat, en español, claro y breve, como un profesor que le ayuda a preparar el examen; con ejemplos del contenido cuando sirva. Después guarda tu respuesta con clarea_guardar (parte «respuesta», resultado {\"texto\": \"tu respuesta\"}) para que también la vea en Clarea.",
-            parts: [{id: "respuesta", title: "Respuesta", instructions: "Pregunta: " + q + (hist0 ? "\n\nConversación anterior:\n" + hist0 : "")}], context: String(o.context || "").slice(0, 400000)})
+            parts: [{id: "respuesta", title: "Respuesta", instructions: "Pregunta: " + q + (hist0 ? "\n\nConversación anterior:\n" + hist0 : "")}], context: (matContext(o.subj, 60000) + String(o.context || "")).slice(0, 400000)})
             .then(poll, x => { pend = null; msgs.push({r: "a", t: "No se ha podido enviar a Claude: " + (x.message || x)}); save(); paint(); });
         }, msg);
         return;
@@ -1144,7 +1145,7 @@ window.CLAI = (function () {
       if (!ready()) { welcome(); return; }
       msgs.push({r: "u", t: q}); ta.value = ""; busyNow = true; save(); paint();
       const hist = msgs.slice(-10).map(m => (m.r === "u" ? "Estudiante: " : "Tú: ") + m.t).join("\n\n");
-      const text = o.context + "\n\n---\nResponde en español, claro y breve (como un profesor que ayuda a preparar el examen), con ejemplos del contenido de arriba cuando sirva. Pon el código entre ``` y los nombres de código entre « ».\n\nConversación:\n" + hist + "\n\nTú:";
+      const text = matContext(o.subj, 60000) + o.context + "\n\n---\nResponde en español, claro y breve (como un profesor que ayuda a preparar el examen), con ejemplos del contenido de arriba cuando sirva. Pon el código entre ``` y los nombres de código entre « ».\n\nConversación:\n" + hist + "\n\nTú:";
       try { msgs.push({r: "a", t: String(await callAI(text, false)).trim()}); }
       catch (x) { msgs.push({r: "a", t: "No he podido responder: " + (errEs ? errEs(x.message || x) : (x.message || x))}); }
       busyNow = false; msgs = msgs.slice(-40); save(); paint();
@@ -1252,7 +1253,8 @@ window.CLAI = (function () {
   const qCourse = S => String(S.course || ((lget("clarea-group") || {}).g) || "").slice(0, 120);
   // «profesor de X (name), en el curso «…»»: any course, not only one
   const qTeacher = S => { const c = qCourse(S); return 'profesor de ' + S.subj + (S.subjName ? ' (' + S.subjName + ')' : '') + (c ? ', en el curso «' + c + '»' : ''); };
-  function qPromptFor(S, part) {
+  function qPromptFor(S, part) { return matContext(S.subj, 80000) + qPromptBase(S, part); }
+  function qPromptBase(S, part) {
     const lang = S.lang === "ca" ? "en catalán" : "en español";
     return 'Eres ' + qTeacher(S) + '. Un estudiante prepara el examen de esta asignatura. El profesor les ha dado estas preguntas, que son las que caerán en el examen. Algunas tienen faltas de ortografía o están a medias: entiéndelas como mejor encaje en la asignatura.\n\n'
       + 'Responde SOLO con un objeto JSON válido, sin texto antes ni después y sin ```. Forma exacta:\n{"items":[{"n":1,"q":"la pregunta bien escrita","level":"facil|media|dificil","why":"por qué tiene esa dificultad, 1 frase","short":"la respuesta en 1-2 frases","answer":"la respuesta completa para el examen: 5-10 frases bien organizadas, con definiciones y el porqué","points":["3 a 6 ideas que no pueden faltar"],"keyTerms":["3 a 6 conceptos o palabras clave que el profe espera leer"],"example":"un ejemplo concreto o un trozo de código corto, si ayuda (si no, vacío)","mistakes":["1 a 3 errores típicos o confusiones"],"tip":"un truco para recordarla"}]}\n\n'
@@ -1297,6 +1299,30 @@ window.CLAI = (function () {
       } catch (err) {}
     }
     return n;
+  }
+
+  /* ---------- the teacher's notes of each subject («Apuntes del profe»): the AI explains as they teach it in class,
+     with their words and examples, keeps to the syllabus and says so when something is not in them ---------- */
+  const MAT_MAX = 400000;                                                   // characters per subject (it syncs with the account)
+  const matGet = subj => (lget("clarea-mat-" + subj) || {}).docs || [];
+  const matSet = (subj, docs) => lset("clarea-mat-" + subj, {t: Date.now(), docs});
+  function matAdd(subj, name, text) {
+    const docs = matGet(subj), room = MAT_MAX - docs.reduce((n, d) => n + d.text.length, 0);
+    const t = String(text || "").replace(/\r/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (!t) return {empty: true};
+    if (room < 200) return {full: true};
+    docs.push({id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: String(name || "Apuntes").slice(0, 80), text: t.slice(0, room), added: Date.now()});
+    matSet(subj, docs);
+    return {cut: t.length > room};
+  }
+  const matDel = (subj, id) => matSet(subj, matGet(subj).filter(d => d.id !== id));
+  // what goes before the instructions of the AI (nothing if the subject has no notes)
+  function matContext(subj, max) {
+    const docs = subj ? matGet(subj) : []; if (!docs.length) return "";
+    let left = max || 80000, body = "";
+    for (const d of docs) { if (left <= 0) break; const t = d.text.slice(0, left); body += "#### " + d.name + "\n" + t + "\n\n"; left -= t.length; }
+    return "### APUNTES DEL PROFESOR (" + subj + ")\nEs el material que el profesor da en clase. Úsalo como referencia principal: explica como en estos apuntes, con sus mismos términos, definiciones y ejemplos, y no te salgas de su temario. Si algo no sale en los apuntes, dilo (por ejemplo: «esto no sale en tus apuntes») en vez de inventarlo.\n\n"
+      + body + "### FIN DE LOS APUNTES\n\n";
   }
 
   /* ---------- notices ---------- */
@@ -1350,7 +1376,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  return {matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
