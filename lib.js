@@ -1371,6 +1371,13 @@ window.CLAI = (function () {
       + body + "### FIN DE LOS APUNTES\n\n";
   }
 
+  /* one piece of work for Claude (a correction…) whose answer goes back to the page that asked for it: it is sent,
+     the page collects it with mcpCollect, and «Para hoy» shows it (name and href) until it is back */
+  async function claudeOnce(t) {
+    await mcpPush({id: t.id, kind: t.kind || "correccion", title: t.title, intro: t.intro, parts: [{id: "r", title: t.part || "Corrección", instructions: t.instructions}], context: t.context || ""});
+    lset("clarea-mcpt-" + t.id, Object.assign({t: Date.now(), parts: ["r"], name: t.title, href: t.href || ""}, t.extra || {}));
+  }
+
   /* ---------- notices ---------- */
   function askNotify() {
     try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
@@ -1422,7 +1429,7 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {matSig, notesApply, notesRun, notesTask, matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  return {claudeOnce, matSig, notesApply, notesRun, notesTask, matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpLink, mcpTeamUrl, mcpTeamOff, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
