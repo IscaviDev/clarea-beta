@@ -1429,7 +1429,147 @@ window.CLAI = (function () {
       + '<ol>' + g.steps.map(x => '<li><span>' + x + '</span></li>').join("") + '</ol>'
       + '<div class="kgtips"><b>Importante</b><ul><li>No compartas la clave ni la enseñes en capturas: quien la tenga puede usarla con tu cuenta.</li><li>Se guarda en tu cuenta: la tendrás en todos tus dispositivos.</li>' + g.tips.map(x => '<li>' + x + '</li>').join("") + '</ul></div></details>';
   }
-  return {claudeOnce, matSig, notesApply, notesRun, notesTask, matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
+  /* ---------- exams by type, like the teacher's: «Localización» (where each thing is and runs), «Conceptos» (the why),
+     and any other type learnt from the teacher's real exams (photos or PDF, kept per subject: only the questions and the style) ---------- */
+  const XTYPES = {
+    loc: {name: "Localización", desc: "Dónde está y dónde se ejecuta cada cosa: archivo, directorio, script, función o método.", ans: "short", code: true},
+    con: {name: "Conceptos", desc: "Entender el porqué: qué hace, por qué se hace así, si es correcto y qué pasaría si…", ans: "written"}
+  };
+  const xmKey = subj => "clarea-xmod-" + String(subj || "_").replace(/[^\w-]/g, "_").slice(0, 40);
+  function xmodGet(subj) { const m = lget(xmKey(subj)) || {}; m.exams = Array.isArray(m.exams) ? m.exams : []; m.custom = m.custom && typeof m.custom === "object" ? m.custom : {}; return m; }
+  function xmodSet(subj, m) { m.t = Date.now(); return lset(xmKey(subj), m); }
+  // the types this project can use: «Localización» only with code; then «Conceptos» and the ones learnt from the teacher's exams
+  function xtypes(subj, doc) {
+    const m = xmodGet(subj), out = [];
+    Object.keys(XTYPES).forEach(id => { if (!(doc && XTYPES[id].code)) out.push(Object.assign({id}, XTYPES[id])); });
+    Object.keys(m.custom).forEach(id => { const t = m.custom[id]; if (t && t.name) out.push({id, name: t.name, desc: t.desc || "", ans: t.ans === "short" ? "short" : "written", custom: true}); });
+    out.forEach(t => { const qs = m.exams.reduce((a, e) => a.concat((e.qs || []).filter(q => q.t === t.id)), []); t.models = qs.length; t.examples = qs.map(q => q.q); });
+    return out;
+  }
+  // photos and PDFs → [{mime, b64, name}] for the AI (photos made smaller, a PDF up to 15 MB)
+  const b64Of = buf => { const a = new Uint8Array(buf); let s = ""; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000)); return btoa(s); };
+  async function shrinkImg(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ko; i.src = url; });
+      const k = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight)), cv = document.createElement("canvas");
+      cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      return cv.toDataURL("image/jpeg", 0.85).split(",")[1];
+    } finally { URL.revokeObjectURL(url); }
+  }
+  async function readFiles(list) {
+    const out = [];
+    for (const f of [...list].slice(0, 10)) {
+      if (/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)) { if (f.size > 15e6) throw new Error("El PDF es demasiado grande (máximo 15 MB)."); out.push({mime: "application/pdf", b64: b64Of(await f.arrayBuffer()), name: f.name}); }
+      else out.push({mime: "image/jpeg", b64: await shrinkImg(f), name: f.name || "foto.jpg"});
+    }
+    return out;
+  }
+  // what the AI is asked when it reads a real exam: only the questions and how the teacher asks, never the student's name, answers or marks
+  function xmodPrompt(subj, course) {
+    const m = xmodGet(subj), cust = Object.keys(m.custom).map(id => '"' + id + '" (' + m.custom[id].name + ': ' + (m.custom[id].desc || "") + ')');
+    return 'Estas fotos o este PDF son un examen real de la asignatura ' + subj + (course ? ', del curso «' + course + '»' : '') + '. Un estudiante lo sube para que Clarea aprenda cómo pregunta su profe y le prepare exámenes parecidos.\n'
+      + 'Copia SOLO las preguntas del profe, tal cual, en su idioma y en orden. No copies el nombre del alumno, sus respuestas escritas a mano, la nota, las correcciones, ni cabeceras o números de página.\n\n'
+      + 'Clasifica cada pregunta con "type":\n- "loc" (Localización): pregunta dónde está o dónde se ejecuta algo (qué archivo, directorio, script, función, método o formato).\n- "con" (Conceptos): pide entender o razonar (qué hace, por qué, si es correcto y por qué, qué pasaría si…).\n'
+      + (cust.length ? '- Tipos que ya conoce Clarea de esta asignatura: ' + cust.join("; ") + '.\n' : '')
+      + '- "otro": si no encaja en ninguno (por ejemplo, completar código, resolver un problema, un esquema). Entonces di en "newType" un nombre corto para ese tipo (2-3 palabras, en español), en "newDesc" qué pide (1 frase) y en "newAns" "short" si se responde con una palabra o un dato, o "written" si hay que explicar.\n\n'
+      + 'Responde SOLO con un objeto JSON válido, sin texto antes ni después y sin ```. Forma exacta:\n'
+      + '{"title":"nombre corto del examen (por ejemplo, la unidad o la prueba)","lang":"idioma de las preguntas, en español (por ejemplo: catalán)","style":"cómo pregunta el profe, 2-3 frases en español: formato, extensión de las respuestas, nivel y qué le importa","questions":[{"q":"la pregunta tal cual","type":"loc|con|otro","newType":"","newDesc":"","newAns":"short|written"}]}';
+  }
+  const slug = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "tipo";
+  // the AI's reading of a real exam, kept for the subject; new types are added by themselves
+  function xmodApply(subj, data, fname) {
+    const m = xmodGet(subj), qs = [];
+    (data && Array.isArray(data.questions) ? data.questions : []).forEach(x => {
+      const q = String(x && (x.q || x.text) || "").replace(/\s+/g, " ").replace(/^\s*(P|Q)?\d{1,3}\s*[.)\-:]\s*/i, "").trim().slice(0, 600); if (!q) return;
+      let t = String(x.type || "").trim();
+      if (!XTYPES[t] && !m.custom[t]) {
+        const name = String(x.newType || "").trim().slice(0, 40);
+        if (!name) t = "con";
+        else { const id = "c-" + slug(name), have = Object.keys(m.custom).find(k => slug(m.custom[k].name) === slug(name)); t = have || id; if (!have) m.custom[t] = {name, desc: String(x.newDesc || "").slice(0, 200), ans: x.newAns === "short" ? "short" : "written"}; }
+      }
+      qs.push({t, q});
+    });
+    if (!qs.length) throw new Error("No he encontrado preguntas en el examen. Prueba con una foto más clara o con el PDF.");
+    const e = {id: Date.now().toString(36), at: Date.now(), name: String(data.title || fname || "Examen").slice(0, 80), lang: String(data.lang || "").slice(0, 30), style: String(data.style || "").slice(0, 600), qs: qs.slice(0, 80)};
+    m.exams.push(e); m.exams = m.exams.slice(-12);
+    if (!xmodSet(subj, m)) throw new Error("No queda espacio en este dispositivo.");
+    return e;
+  }
+  function xmodDrop(subj, id) {
+    const m = xmodGet(subj); m.exams = m.exams.filter(e => e.id !== id);
+    const used = new Set(m.exams.reduce((a, e) => a.concat((e.qs || []).map(q => q.t)), []));
+    Object.keys(m.custom).forEach(k => { if (!used.has(k)) delete m.custom[k]; });
+    xmodSet(subj, m);
+  }
+  // how many questions: as many as the teacher puts of that type (between 4 and 15)
+  function xcount(subj, t) {
+    const m = xmodGet(subj), per = m.exams.map(e => (e.qs || []).filter(q => q.t === t.id).length).filter(Boolean);
+    if (per.length) return Math.max(4, Math.min(15, Math.round(per.reduce((a, b) => a + b, 0) / per.length)));
+    return t.ans === "short" ? 12 : 6;
+  }
+  // the instructions to make an exam of one type with the project (and the teacher's style, if there are real exams)
+  function xexamPrompt(c, typeId) {
+    const subj = c.P.subj, t = xtypes(subj, isDoc(c)).find(x => x.id === typeId); if (!t) throw new Error("Ese tipo de examen no existe.");
+    const m = xmodGet(subj), n = xcount(subj, t), langs = m.exams.map(e => e.lang).filter(Boolean), lang = langs.length ? langs[langs.length - 1] : "", styles = m.exams.map(e => e.style).filter(Boolean).slice(-3);
+    const ex = t.examples.slice(-14), short = t.ans === "short";
+    const what = t.id === "loc" ? 'Preguntas de LOCALIZACIÓN: dónde está y dónde se ejecuta cada cosa del proyecto. Por ejemplo: en qué archivo se guardan los datos y en qué formato, qué script se ejecuta al hacer una acción, qué archivo envía los datos y con qué método, en qué directorio está un archivo, qué función hace algo.'
+      : t.id === "con" ? 'Preguntas de CONCEPTOS: entender el porqué del proyecto. Por ejemplo: qué hace una parte y para qué, por qué se ha hecho así, si algo es correcto o seguro y por qué, qué pasaría si se cambiara, qué alternativa sería mejor.'
+      : 'Preguntas del tipo «' + t.name + '»' + (t.desc ? ': ' + t.desc : '.');
+    const shape = short
+      ? '{"questions":[{"q":"la pregunta","parts":[["lo que pide primero","otra forma válida de decirlo"],["lo segundo que pide, si pide dos cosas"]],"answer":"la respuesta completa y corta","why":"dónde se ve y por qué, 1-2 frases en español","file":"ruta del archivo donde está la respuesta","line":12}]}'
+      : '{"questions":[{"q":"la pregunta","model":"respuesta modelo razonada, 3-6 frases","keyTerms":["3 a 6 conceptos que una buena respuesta debe decir"],"wrong":["0 a 3 ideas falsas típicas"],"why":"la idea clave explicada fácil, 1-2 frases en español","file":"ruta","line":12}]}';
+    const rules = short
+      ? '- Cada respuesta es corta y se comprueba con los archivos: un nombre de archivo o directorio que existe en el proyecto (escrito exactamente igual), un método (GET, POST…), una función o un formato (JSON, XML…) que aparece en el código.\n- En "parts" va cada cosa que pide la pregunta (si pide archivo y formato, dos partes). En cada parte, la respuesta y otras formas válidas de decirla (por ejemplo, el nombre con y sin la ruta).\n- Nada que no se vea en el código: si no hay un script para algo, no preguntes por él.\n'
+      : '- Respuestas que se razonan, no de memoria. Puedes preguntar si algo del proyecto es correcto (por ejemplo, el método o la seguridad que usa) y por qué.\n- La respuesta modelo es correcta y se basa en lo que hace este código.\n';
+    return matContext(subj, 60000) + intro(c) + 'Escribe un examen de ' + n + ' preguntas, como los del profe. ' + what + '\n\n'
+      + (ex.length ? 'Así pregunta el profe (preguntas de sus exámenes reales de este tipo; imita el estilo, el formato y el nivel, pero no las copies: pregunta sobre ESTE proyecto):\n' + ex.map(q => '- ' + q).join("\n") + '\n\n' : '')
+      + (styles.length ? 'Cómo es el profe: ' + styles.join(" ") + '\n\n' : '')
+      + JSONONLY + ' Forma exacta:\n' + shape + '\n\nReglas:\n- Exactamente ' + n + ' preguntas, de lo más importante del proyecto, sin repetir.\n' + rules
+      + '- Coherente con lo que enseña el profe en esta asignatura: nada rebuscado ni descabellado.\n'
+      + '- Preguntas y respuestas ' + (lang ? 'en ' + lang + ', como el profe' : 'en español') + '. "why" en español. Nombres de código entre « ».\n- "file" y "line" señalan dónde se ve la respuesta.\n\n'
+      + summaries(c) + codeLabel(c) + ':\n\n' + codeBundle(c, 90000);
+  }
+  // a short answer is right only if Clarea finds it in the project: a file or folder that exists, or a word in the code
+  const normX = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[«»"'`]/g, "").trim();
+  function xcheck(c, alt) {
+    const a = normX(alt).replace(/^\.?\//, ""); if (a.length < 2) return false;
+    const paths = c.paths.map(normX);
+    if (paths.some(p => p === a || p.endsWith("/" + a) || p.split("/").includes(a) || p.split("/").pop().replace(/\.[^.]+$/, "") === a)) return true;
+    const re = new RegExp("(^|[^a-z0-9_$])" + a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|[^a-z0-9_])");
+    return c.paths.some(p => re.test(normX(c.CODE.files[p])));
+  }
+  function xexamApply(c, typeId, data) {
+    const t = xtypes(c.P.subj, isDoc(c)).find(x => x.id === typeId); if (!t) throw new Error("Ese tipo de examen no existe.");
+    const files = c.CODE.files, fix = f => !f || files[f] ? f : (c.paths.find(p => p.endsWith("/" + f) || baseName(p) === baseName(f)) || "");
+    const qs = (data && Array.isArray(data.questions) ? data.questions : []).map(x => {
+      if (!x || !x.q) return null;
+      const base = {q: String(x.q).slice(0, 600), why: String(x.why || "").slice(0, 600), file: fix(x.file ? String(x.file) : ""), line: +x.line || 0};
+      if (t.ans === "short") {
+        const parts = (Array.isArray(x.parts) ? x.parts : [x.answer]).map(p => (Array.isArray(p) ? p : [p]).map(s => String(s || "").trim().slice(0, 80)).filter(Boolean))
+          .map(alts => isDoc(c) ? alts : alts.filter(a => xcheck(c, a))).filter(alts => alts.length).slice(0, 4);
+        const want = (Array.isArray(x.parts) ? x.parts : [x.answer]).length;
+        if (!parts.length || parts.length < want) return null;                 // something it asks is not in the project: out
+        return Object.assign(base, {type: "loc", parts, answer: String(x.answer || parts.map(p => p[0]).join(" · ")).slice(0, 300)});
+      }
+      if (!x.model) return null;
+      return Object.assign(base, {type: "written", model: String(x.model).slice(0, 1500), keyTerms: (Array.isArray(x.keyTerms) ? x.keyTerms : []).map(String).slice(0, 8), wrong: (Array.isArray(x.wrong) ? x.wrong : []).map(String).slice(0, 4)});
+    }).filter(Boolean);
+    if (qs.length < 3) throw new Error("Tu IA no ha preparado bastantes preguntas que se puedan comprobar con tu proyecto. Prueba otra vez.");
+    c.AID.xex = Array.isArray(c.AID.xex) ? c.AID.xex : [];
+    c.AID.xex.push({id: Date.now().toString(36), type: t.id, name: t.name, at: Date.now(), qs: qs.slice(0, 15)});
+    if (!c.save()) throw new Error("No queda espacio en este dispositivo.");
+    return c.AID.xex.length - 1;
+  }
+  // grading a short answer: each part it asks for, found in what the student wrote (any of its valid forms)
+  function xgradeShort(q, text) {
+    const u = " " + normX(text).replace(/[^a-z0-9_$./\-ñ]+/g, " ") + " ";
+    const hit = alt => { const a = normX(alt).replace(/^\.?\//, ""), b = a.replace(/\.[a-z0-9]+$/, ""); const w = x => x.length >= 2 && new RegExp("[ /]" + x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[ /.]").test(u); return w(a) || (b !== a && b.length >= 4 && w(b)); };
+    const found = (q.parts || []).map(alts => alts.some(hit));
+    return {found, n: found.filter(Boolean).length, of: found.length};
+  }
+  return {XTYPES, xtypes, xmodGet, xmodPrompt, xmodApply, xmodDrop, xexamPrompt, xexamApply, xgradeShort, xcheck, readFiles, claudeOnce, matSig, notesApply, notesRun, notesTask, matGet, matAdd, matDel, matContext, qPromptFor, qTeacher, qCourse, pendingAll, sendAll, saveDoubt, useInfo, useLine, useShort, useWarn, chooseHtml, moreHtml, welcome, welcomeOnce, KEYGUIDE, keyGuide, PROV, cfg, cfgSet, ready, ctx, buildJobs, jobTitle, jobWhat, status, prompt, parseJSON, applyResult,
           listModels, pickModel, callAI, callSmart, modelNow, mcpOn, mcpUrl, mcpConnect, mcpLink, mcpTeamUrl, mcpTeamOff, mcpProgressHtml, mcpPaint, mcpDisconnect, mcpPush, mcpDrop, mcpCollect, mcpStatus, mcpProjectTask, MCP_SAY, MCP_URL, mcpOpenClaude, mcpGo, jsonBlocks, promptAll, applyAll, openChat, projectContext, isDone, switchModel, nextModel, errEs, cloudOn, cloudSubmit, cloudFetch, cloudCancel, wakeSupported, wakeWanted, wakeSet, wakeOn: () => !!wake, intro, JSONONLY, waitText, start, stop, dismiss, resume, busy, queue: qGet, runningHere: () => runningHere};
 })();
 
