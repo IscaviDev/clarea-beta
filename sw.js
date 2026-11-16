@@ -2,9 +2,9 @@
    - Each published version has its own cache, filled when the new version is downloaded.
    - The new version waits until the user taps "Actualizar" (message SKIP_WAITING), then the page reloads.
    - Works without internet: everything is answered from the cache. */
-const CACHE = "clarea-20261116104822";
+const CACHE = "clarea-20261116111142";
 // las páginas y todo lo de assets/ (la lista la escribe el build: tools/vite-clarea.js)
-const CORE = ["./","./index.html","./repaso-pj6.html","./proyecto.html","./preguntas.html","./privacidad.html","./manifest.webmanifest","./assets/css/index-BLRu3dGO.css","./assets/css/preguntas-jDRoSymO.css","./assets/css/privacidad-MprRahGH.css","./assets/css/proyecto-CrSnqvIi.css","./assets/css/repaso-pj6-BMJF5Q73.css","./assets/img/apple-touch-icon.png","./assets/img/favicon.png","./assets/img/icon-192.png","./assets/img/icon-512.png","./assets/js/arranque-7fc6e0b3.js","./assets/js/arriba-DqIk59Ij.js","./assets/js/comun-DpAVsiua.js","./assets/js/ia-BlBWPXaH.js","./assets/js/index-BqjwgTTW.js","./assets/js/menu-paginas-DpUgNuBW.js","./assets/js/preguntas-BbyaG7eW.js","./assets/js/proyecto-BSPwqAe_.js","./assets/js/repaso-pj6-jjARpDKw.js"];
+const CORE = ["./","./index.html","./repaso-pj6.html","./proyecto.html","./preguntas.html","./privacidad.html","./manifest.webmanifest","./assets/css/index-BLRu3dGO.css","./assets/css/preguntas-jDRoSymO.css","./assets/css/privacidad-MprRahGH.css","./assets/css/proyecto-CrSnqvIi.css","./assets/css/repaso-pj6-BMJF5Q73.css","./assets/img/apple-touch-icon.png","./assets/img/favicon.png","./assets/img/icon-192.png","./assets/img/icon-512.png","./assets/js/arranque-7fc6e0b3.js","./assets/js/arriba-DqIk59Ij.js","./assets/js/comun-HvVR8wxw.js","./assets/js/ia-BlBWPXaH.js","./assets/js/index-gM6GEPaN.js","./assets/js/menu-paginas-DpUgNuBW.js","./assets/js/preguntas-BN7Stf_k.js","./assets/js/proyecto-DsXgmaMe.js","./assets/js/repaso-pj6-DLSM00cY.js"];
 
 function pageKey(req){ const p = new URL(req.url).pathname; return /repaso-pj6\.html$/.test(p) ? "./repaso-pj6.html" : /proyecto\.html$/.test(p) ? "./proyecto.html" : /preguntas\.html$/.test(p) ? "./preguntas.html" : /privacidad\.html$/.test(p) ? "./privacidad.html" : "./index.html"; }
 
