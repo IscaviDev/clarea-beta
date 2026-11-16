@@ -2,8 +2,9 @@
    - Each published version has its own cache, filled when the new version is downloaded.
    - The new version waits until the user taps "Actualizar" (message SKIP_WAITING), then the page reloads.
    - Works without internet: everything is answered from the cache. */
-const CACHE = "clarea-20261115195347";
-const CORE = ["./", "./index.html", "./repaso-pj6.html", "./proyecto.html", "./preguntas.html", "./privacidad.html", "./lib.js?v=20261115195347", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
+const CACHE = "clarea-20261116100845";
+// las páginas y todo lo de assets/ (la lista la escribe el build: tools/vite-clarea.js)
+const CORE = ["./","./index.html","./repaso-pj6.html","./proyecto.html","./preguntas.html","./privacidad.html","./manifest.webmanifest","./assets/css/index-BLRu3dGO.css","./assets/css/preguntas-jDRoSymO.css","./assets/css/privacidad-MprRahGH.css","./assets/css/proyecto-CrSnqvIi.css","./assets/css/repaso-pj6-BMJF5Q73.css","./assets/img/apple-touch-icon.png","./assets/img/favicon.png","./assets/img/icon-192.png","./assets/img/icon-512.png","./assets/js/arranque-7fc6e0b3.js","./assets/js/arriba-DqIk59Ij.js","./assets/js/comun-k2NaGoFf.js","./assets/js/ia-BlBWPXaH.js","./assets/js/index-CT7Sp_pA.js","./assets/js/menu-paginas-DpUgNuBW.js","./assets/js/preguntas-DpL7ZaFL.js","./assets/js/proyecto-eZi-_J1Q.js","./assets/js/repaso-pj6-T46CdDC5.js"];
 
 function pageKey(req){ const p = new URL(req.url).pathname; return /repaso-pj6\.html$/.test(p) ? "./repaso-pj6.html" : /proyecto\.html$/.test(p) ? "./proyecto.html" : /preguntas\.html$/.test(p) ? "./preguntas.html" : /privacidad\.html$/.test(p) ? "./privacidad.html" : "./index.html"; }
 
@@ -49,7 +50,7 @@ self.addEventListener("fetch", e => {
 // a reminder sent by the Clarea push Worker (arrives also with Clarea closed)
 self.addEventListener("push", e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (x) { d = {title: "Clarea", body: e.data ? e.data.text() : ""}; }
-  e.waitUntil(self.registration.showNotification(d.title || "Clarea", {body: d.body || "", icon: "icon-192.png", badge: "icon-192.png", tag: d.tag || undefined, data: {url: d.url || "./"}}));
+  e.waitUntil(self.registration.showNotification(d.title || "Clarea", {body: d.body || "", icon: "assets/img/icon-192.png", badge: "assets/img/icon-192.png", tag: d.tag || undefined, data: {url: d.url || "./"}}));
 });
 self.addEventListener("notificationclick", e => {
   e.notification.close();
